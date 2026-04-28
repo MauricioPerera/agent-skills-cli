@@ -212,3 +212,49 @@ describe("FileBank — reset", () => {
     expect(await bank.listSubscriptions()).toEqual([]);
   });
 });
+
+// v0.6.1: surface corruption instead of silently returning empty.
+describe("FileBank corruption discrimination (v0.6.1+)", () => {
+  it("getMeta throws CliError when meta.json is invalid JSON (not silent null)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.initMeta({ embedding_model: "stub:fnv1a-32", embedding_dim: 32 });
+
+    // Corrupt the meta file
+    const fs = await import("node:fs/promises");
+    await fs.writeFile(join(tmpDir, "meta.json"), "{not json", "utf8");
+
+    await expect(bank.getMeta()).rejects.toThrow(/meta\.json.*not valid JSON/i);
+  });
+
+  it("getMeta returns null when meta.json simply doesn't exist (the normal first-run path)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    expect(await bank.getMeta()).toBeNull();
+  });
+
+  it("listSubscriptions throws CliError on malformed JSON (not silent empty)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.ensureDir();
+
+    const fs = await import("node:fs/promises");
+    await fs.writeFile(join(tmpDir, "subscriptions.json"), "{not json", "utf8");
+
+    await expect(bank.listSubscriptions()).rejects.toThrow(/subscriptions\.json.*not valid JSON/i);
+  });
+
+  it("listAudit returns [] when audit log doesn't exist yet", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    expect(await bank.listAudit()).toEqual([]);
+  });
+
+  it("initMeta refuses to overwrite a meta.json that exists but is unreadable as JSON", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.ensureDir();
+
+    const fs = await import("node:fs/promises");
+    await fs.writeFile(join(tmpDir, "meta.json"), "{corrupt", "utf8");
+
+    await expect(
+      bank.initMeta({ embedding_model: "stub:fnv1a-32", embedding_dim: 32 }),
+    ).rejects.toThrow(/meta\.json exists.*unreadable/i);
+  });
+});

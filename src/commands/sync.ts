@@ -26,6 +26,17 @@ export interface SyncOptions {
   embedder: EmbeddingProvider;
   /** Optional fetch override for tests. */
   fetchFn?: typeof fetch;
+  /**
+   * Maximum skills to fetch+embed concurrently. Default: 4.
+   *
+   * Why 4: a small enough fan-out to stay polite to GitHub/jsDelivr and the
+   * embedding provider, but large enough to cut wall-clock time by ~3-4× on
+   * realistic packs (7 skills × ~12s per skill end-to-end → ~25s instead
+   * of ~84s). Set to 1 to force sequential. Cloudflare/OpenAI handle this
+   * fine; Ollama serializes per-model internally so concurrency doesn't help
+   * there but doesn't hurt either.
+   */
+  concurrency?: number;
 }
 
 export interface SyncSkillResult {
@@ -185,21 +196,30 @@ export const runSync = async (opts: SyncOptions): Promise<SyncResult> => {
     );
   }
 
-  // 5. Ingest each skill
-  const results: SyncSkillResult[] = [];
-  for (const entry of index.skills) {
-    const result = await syncSingleSkill({
-      entry,
-      repo,
-      sha,
-      urlTemplate: index.url_template,
-      bank,
-      embedder,
-      fetchImpl,
-      refRequested,
-    });
-    results.push(result);
-  }
+  // 5. Ingest skills with bounded concurrency. Results preserve index.skills order
+  //    regardless of completion order — UX wants the same listing every run.
+  const concurrency = Math.max(1, opts.concurrency ?? 4);
+  const results: SyncSkillResult[] = new Array(index.skills.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = cursor++;
+      if (i >= index.skills.length) return;
+      const entry = index.skills[i] as SkillsIndexEntry;
+      results[i] = await syncSingleSkill({
+        entry,
+        repo,
+        sha,
+        urlTemplate: index.url_template,
+        bank,
+        embedder,
+        fetchImpl,
+        refRequested,
+      });
+    }
+  };
+  const n = Math.min(concurrency, index.skills.length);
+  await Promise.all(Array.from({ length: n }, () => worker()));
 
   // 6. Persist subscription
   const subscription: Subscription = {

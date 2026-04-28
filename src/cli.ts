@@ -9,7 +9,7 @@ import { runSync } from "./commands/sync.js";
 import { printQueryResult, runQuery } from "./commands/query.js";
 import { printExecResult, runExec } from "./commands/exec.js";
 
-const VERSION = "0.6.0";
+const VERSION = "0.6.1";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 

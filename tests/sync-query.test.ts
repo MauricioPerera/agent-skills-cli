@@ -276,3 +276,103 @@ describe("runQuery — happy path", () => {
     ).rejects.toThrow(/empty/);
   });
 });
+
+// v0.6.1: bounded concurrency in runSync.
+describe("runSync — bounded concurrency (v0.6.1+)", () => {
+  it("syncs all skills with concurrency=4 and preserves index order in results", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const embedder = createStubEmbedder(32);
+
+    // 12 skills — enough to overflow the 4-wide pool multiple times.
+    const ids = Array.from({ length: 12 }, (_, i) => `skill-${String(i).padStart(2, "0")}`);
+
+    let inflight = 0;
+    let peakInflight = 0;
+
+    const fakeFetch: typeof fetch = async (url) => {
+      const u = url.toString();
+      if (u.includes("/git/refs/tags/")) {
+        return new Response(JSON.stringify({ object: { sha: FAKE_SHA } }), { status: 200 });
+      }
+      if (u.endsWith("/skills-index.json")) {
+        return new Response(JSON.stringify({
+          schema_version: "0.1",
+          skills: ids.map((id) => ({
+            id, version: "1.0.0", url: `https://cdn.example.com/${id}/SKILL.md`,
+          })),
+        }), { status: 200 });
+      }
+      const m = u.match(/\/(skill-\d+)\/SKILL\.md$/);
+      if (m) {
+        // Track concurrent in-flight skill fetches (these are gated by the
+        // worker pool, so peak ≤ concurrency).
+        inflight += 1;
+        peakInflight = Math.max(peakInflight, inflight);
+        await new Promise((r) => setTimeout(r, 5));
+        inflight -= 1;
+        return new Response(VALID_SKILL_MD(m[1] as string, `do ${m[1]}`), { status: 200 });
+      }
+      return new Response("404", { status: 404 });
+    };
+
+    const result = await runSync({
+      source: "github.com/test/big-pack@v1.0.0",
+      bank,
+      embedder,
+      fetchFn: fakeFetch,
+      concurrency: 4,
+    });
+
+    expect(result.total).toBe(12);
+    expect(result.synced).toBe(12);
+
+    // Order MUST match the index, not completion order
+    expect(result.skills.map((s) => s.id)).toEqual(ids);
+
+    // Peak in-flight must respect the limit
+    expect(peakInflight).toBeGreaterThan(1);
+    expect(peakInflight).toBeLessThanOrEqual(4);
+  });
+
+  it("concurrency=1 forces sequential (peak in-flight = 1)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const embedder = createStubEmbedder(32);
+
+    let inflight = 0;
+    let peak = 0;
+    const fakeFetch: typeof fetch = async (url) => {
+      const u = url.toString();
+      if (u.includes("/git/refs/tags/")) {
+        return new Response(JSON.stringify({ object: { sha: FAKE_SHA } }), { status: 200 });
+      }
+      if (u.endsWith("/skills-index.json")) {
+        return new Response(JSON.stringify({
+          schema_version: "0.1",
+          skills: [
+            { id: "a", version: "1.0.0", url: "https://cdn.example.com/a/SKILL.md" },
+            { id: "b", version: "1.0.0", url: "https://cdn.example.com/b/SKILL.md" },
+            { id: "c", version: "1.0.0", url: "https://cdn.example.com/c/SKILL.md" },
+          ],
+        }), { status: 200 });
+      }
+      const m = u.match(/\/([abc])\/SKILL\.md$/);
+      if (m) {
+        inflight += 1;
+        peak = Math.max(peak, inflight);
+        await new Promise((r) => setTimeout(r, 5));
+        inflight -= 1;
+        return new Response(VALID_SKILL_MD(m[1] as string, `do ${m[1]}`), { status: 200 });
+      }
+      return new Response("404", { status: 404 });
+    };
+
+    await runSync({
+      source: "github.com/test/pack@v1.0.0",
+      bank,
+      embedder,
+      fetchFn: fakeFetch,
+      concurrency: 1,
+    });
+    expect(peak).toBe(1);
+  });
+});

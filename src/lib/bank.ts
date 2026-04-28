@@ -18,6 +18,18 @@ import type { SkillFrontmatter } from "../types.js";
 import { cosineSimilarity } from "./embed.js";
 import { CliError, EXIT } from "./errors.js";
 
+/**
+ * Distinguish "file/dir not present yet" (which is normal for fresh banks)
+ * from any other I/O failure (permission denied, EIO, JSON corruption, …).
+ * Used so the bank treats a missing meta.json as "not initialized" while
+ * still surfacing real failures to the operator instead of silently lying.
+ */
+const isMissing = (err: unknown): boolean => {
+  if (err === null || typeof err !== "object") return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+};
+
 export interface Subscription {
   id: string;
   source_type: "git" | "url";
@@ -150,8 +162,18 @@ export class FileBank {
     try {
       const text = await readFile(this.metaPath, "utf8");
       existing = JSON.parse(text) as BankMeta;
-    } catch {
-      // not initialized yet
+    } catch (err) {
+      if (!isMissing(err)) {
+        // Permission error, EIO, or corrupted JSON — surface it instead of
+        // silently re-initialising over a half-broken bank.
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new CliError(
+          EXIT.RUNTIME,
+          `bank meta.json exists at ${this.metaPath} but is unreadable: ${msg}. ` +
+            `If corruption, run 'agent-skills reset' to start over.`,
+        );
+      }
+      // ENOENT: not initialized yet, normal first-run path.
     }
 
     if (existing && existing.embedding_model !== meta.embedding_model) {
@@ -171,24 +193,53 @@ export class FileBank {
   }
 
   async getMeta(): Promise<BankMeta | null> {
+    let text: string;
     try {
-      const text = await readFile(this.metaPath, "utf8");
+      text = await readFile(this.metaPath, "utf8");
+    } catch (err) {
+      if (isMissing(err)) return null;
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new CliError(
+        EXIT.RUNTIME,
+        `cannot read bank meta.json at ${this.metaPath}: ${msg}`,
+      );
+    }
+    try {
       return JSON.parse(text) as BankMeta;
-    } catch {
-      return null;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new CliError(
+        EXIT.RUNTIME,
+        `bank meta.json at ${this.metaPath} is not valid JSON: ${msg}. ` +
+          `Run 'agent-skills reset' to start over.`,
+      );
     }
   }
 
   // ─── Subscriptions ───────────────────────────────────────────────────
 
   async listSubscriptions(): Promise<Subscription[]> {
+    let text: string;
     try {
-      const text = await readFile(this.subsPath, "utf8");
+      text = await readFile(this.subsPath, "utf8");
+    } catch (err) {
+      if (isMissing(err)) return [];
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new CliError(
+        EXIT.RUNTIME,
+        `cannot read subscriptions.json at ${this.subsPath}: ${msg}`,
+      );
+    }
+    try {
       const parsed = JSON.parse(text);
       if (!Array.isArray(parsed)) return [];
       return parsed as Subscription[];
-    } catch {
-      return [];
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new CliError(
+        EXIT.RUNTIME,
+        `subscriptions.json at ${this.subsPath} is not valid JSON: ${msg}`,
+      );
     }
   }
 
@@ -223,22 +274,31 @@ export class FileBank {
   }
 
   async listSkills(): Promise<IndexedSkill[]> {
+    let entries: string[];
     try {
-      const entries = await readdir(this.skillsDir);
-      const skills: IndexedSkill[] = [];
-      for (const entry of entries) {
-        if (!entry.endsWith(".json")) continue;
-        try {
-          const text = await readFile(join(this.skillsDir, entry), "utf8");
-          skills.push(JSON.parse(text) as IndexedSkill);
-        } catch {
-          // skip corrupt entries
-        }
-      }
-      return skills;
-    } catch {
-      return [];
+      entries = await readdir(this.skillsDir);
+    } catch (err) {
+      if (isMissing(err)) return []; // bank not synced yet
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new CliError(
+        EXIT.RUNTIME,
+        `cannot read skills directory at ${this.skillsDir}: ${msg}`,
+      );
     }
+    const skills: IndexedSkill[] = [];
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      try {
+        const text = await readFile(join(this.skillsDir, entry), "utf8");
+        skills.push(JSON.parse(text) as IndexedSkill);
+      } catch {
+        // Per-entry corruption is non-fatal: the bank is a flat collection of
+        // independent skill records. A corrupt one shouldn't stop us from
+        // serving the rest. Operators can detect this via `agent-skills list`
+        // returning a smaller-than-expected count.
+      }
+    }
+    return skills;
   }
 
   async removeSkill(identity: string): Promise<boolean> {
@@ -336,8 +396,13 @@ export class FileBank {
     let text: string;
     try {
       text = await readFile(this.auditPath, "utf8");
-    } catch {
-      return [];
+    } catch (err) {
+      if (isMissing(err)) return []; // no audit log yet
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new CliError(
+        EXIT.RUNTIME,
+        `cannot read audit log at ${this.auditPath}: ${msg}`,
+      );
     }
     const lines = text.split("\n").filter((l) => l.length > 0);
     const entries: AuditEntry[] = [];

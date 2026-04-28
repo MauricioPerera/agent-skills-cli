@@ -401,11 +401,20 @@ export interface ResolveEmbedderOptions {
  *
  * Selection algorithm:
  *   1. If `opts.provider` is set, use it.
- *   2. Else if env.EMBEDDING_PROVIDER is set, use that.
- *   3. Else auto-detect: prefer Ollama (zero-config) > Cloudflare (CF_*) > OpenAI (OPENAI_API_KEY).
- *      Auto-detect of Ollama only triggers if OLLAMA_BASE_URL is set OR no other provider is configured.
+ *   2. Else if `env.EMBEDDING_PROVIDER` is set, use that.
+ *   3. Else auto-detect, in this order:
+ *        a. Cloudflare — if both CF_ACCOUNT_ID and CF_API_TOKEN are set.
+ *        b. OpenAI — if OPENAI_API_KEY is set.
+ *        c. Ollama — if OLLAMA_BASE_URL or OLLAMA_MODEL is set as a hint.
+ *   4. Else throw a USAGE error listing all 3 options.
  *
- * Throws a USAGE error if no provider is configured.
+ * Rationale for the auto-detect order: existing Cloudflare users (the v0.2-v0.5
+ * audience) keep working with no env changes; explicit OpenAI keys signal a
+ * clear opt-in; Ollama is reserved for the explicit case (no other creds present
+ * AND a positive OLLAMA_* hint) because it would otherwise shadow misconfigured
+ * environments where the user forgot to set their real provider's vars.
+ *
+ * To override the auto-detect priority, set EMBEDDING_PROVIDER explicitly.
  */
 export const resolveEmbedderFromEnv = (
   opts: ResolveEmbedderOptions = {},

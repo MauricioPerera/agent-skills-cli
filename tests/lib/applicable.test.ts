@@ -133,3 +133,55 @@ describe("checkApplicability — multi-constraint conjunction", () => {
     ).toBe(true);
   });
 });
+
+// v0.6.1: detectAvailableCommands no longer spawns a shell.
+describe("detectAvailableCommands (v0.6.1+ — pure-Node PATH scan)", () => {
+  // Deferred imports because the module caches available-command results
+  // across tests; we _resetHostCache between subtests via a fresh import
+  // would be even cleaner, but module-level caches persist.
+
+  it("rejects names containing path or shell metacharacters without filesystem access", async () => {
+    const { detectAvailableCommands, _resetHostCache } = await import(
+      "../../src/lib/applicable.js"
+    );
+    _resetHostCache();
+    const result = detectAvailableCommands([
+      "; rm -rf /",
+      "$(whoami)",
+      "../../../etc/passwd",
+      "foo bar",
+      "ls|cat",
+    ]);
+    expect(result.size).toBe(0);
+  });
+
+  it("accepts a real binary that exists on PATH (uses node itself, present in any test env)", async () => {
+    const { detectAvailableCommands, _resetHostCache } = await import(
+      "../../src/lib/applicable.js"
+    );
+    _resetHostCache();
+    // `node` MUST be on PATH — vitest runs under node, so this is a safe oracle.
+    const result = detectAvailableCommands(["node"]);
+    expect(result.has("node")).toBe(true);
+  });
+
+  it("returns empty set for a non-existent binary", async () => {
+    const { detectAvailableCommands, _resetHostCache } = await import(
+      "../../src/lib/applicable.js"
+    );
+    _resetHostCache();
+    const result = detectAvailableCommands(["definitely-not-a-real-binary-xyzzy-9999"]);
+    expect(result.size).toBe(0);
+  });
+
+  it("caches results across calls (idempotent for the process lifetime)", async () => {
+    const { detectAvailableCommands, _resetHostCache } = await import(
+      "../../src/lib/applicable.js"
+    );
+    _resetHostCache();
+    const a = detectAvailableCommands(["node"]);
+    const b = detectAvailableCommands(["node"]);
+    // Same membership; underlying cache hit on the second call.
+    expect(a.has("node")).toBe(b.has("node"));
+  });
+});

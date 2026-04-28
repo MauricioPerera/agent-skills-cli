@@ -20,7 +20,8 @@
 //     pre-compute available commands; this module accepts that as a
 //     parameter. If unset, command checks pass through.)
 
-import { execSync } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
+import { delimiter as PATH_DELIM, join } from "node:path";
 import { platform, arch } from "node:os";
 import type { ApplicableWhen } from "../types.js";
 
@@ -73,8 +74,38 @@ export const detectHost = (): HostContext => {
 };
 
 /**
- * Lazy-detect available shell commands. Calls `command -v <name>` for each
- * requested command. Cached. Skipped on platforms without a POSIX-ish shell.
+ * Resolve a command name against PATH WITHOUT spawning a shell. Pure Node:
+ * iterates entries in `process.env.PATH`, applies Windows PATHEXT, and stats
+ * each candidate. Cross-platform and fork-free.
+ *
+ * Returns true if `cmd` resolves to a regular file on PATH. Symlinks are
+ * followed by `existsSync`.
+ */
+const resolveOnPath = (cmd: string): boolean => {
+  const PATH = process.env["PATH"] ?? "";
+  if (PATH.length === 0) return false;
+  const dirs = PATH.split(PATH_DELIM).filter((d) => d.length > 0);
+  const exts =
+    platform() === "win32"
+      ? (process.env["PATHEXT"] ?? ".EXE;.BAT;.CMD;.COM").split(";")
+      : [""];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = join(dir, cmd + ext);
+      if (!existsSync(candidate)) continue;
+      try {
+        if (statSync(candidate).isFile()) return true;
+      } catch {
+        // permission error on stat — keep going
+      }
+    }
+  }
+  return false;
+};
+
+/**
+ * Lazy-detect available shell commands. Pure-Node PATH scan, no shell, no
+ * subprocess. Cached per process for the lifetime of the CLI invocation.
  *
  * For perf, this should be called ONCE per CLI invocation with the full union
  * of commands referenced by any skill in the bank, not per-skill.
@@ -89,16 +120,14 @@ export const detectAvailableCommands = (commands: readonly string[]): Set<string
       if (cachedAvailableCommands.get(cmd) === true) available.add(cmd);
       continue;
     }
-    let isAvailable = false;
-    try {
-      execSync(`command -v ${cmd.replace(/[^a-zA-Z0-9_-]/g, "")}`, {
-        stdio: "ignore",
-        shell: "bash",
-      });
-      isAvailable = true;
-    } catch {
-      isAvailable = false;
+    // Reject command names with characters that can't appear in a real
+    // executable on any sane filesystem. Prevents pathological skills from
+    // poking around the host with weird inputs.
+    if (!/^[a-zA-Z0-9_.+-]+$/.test(cmd)) {
+      cachedAvailableCommands.set(cmd, false);
+      continue;
     }
+    const isAvailable = resolveOnPath(cmd);
     cachedAvailableCommands.set(cmd, isAvailable);
     if (isAvailable) available.add(cmd);
   }
