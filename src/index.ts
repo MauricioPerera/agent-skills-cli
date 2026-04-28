@@ -115,3 +115,11 @@ export type {
 
 export { runExec, printExecResult } from "./commands/exec.js";
 export type { ExecOptions, ExecResult } from "./commands/exec.js";
+
+export { runBench, printBenchResult } from "./commands/bench.js";
+export type {
+  BenchOptions,
+  BenchResult,
+  BenchQueryResult,
+  BenchTruthEntry,
+} from "./commands/bench.js";

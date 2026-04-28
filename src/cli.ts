@@ -8,8 +8,9 @@ import { printValidateResult, runValidate } from "./commands/validate.js";
 import { runSync } from "./commands/sync.js";
 import { printQueryResult, runQuery } from "./commands/query.js";
 import { printExecResult, runExec } from "./commands/exec.js";
+import { printBenchResult, runBench } from "./commands/bench.js";
 
-const VERSION = "0.6.1";
+const VERSION = "0.7.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -25,6 +26,8 @@ Commands (need an embedding provider — see ENV section below):
   sync <repo>[@<ref>]              Fetch + embed + index skills from a git source.
                                    Default ref: main.
   query "<intent>" [--k N]         Find the top-K skills matching an intent.
+  bench <truth-file> [--k N]       Measure retrieval accuracy against a ground-truth
+                                   file of (intent, expected_id) pairs.
 
 Commands (local, no embedding API needed):
   exec <skill> --args <json>       Substitute placeholders + execute via bash.
@@ -100,9 +103,13 @@ Examples:
   # Query — find skills matching an intent
   agent-skills query "I need to fetch data from a URL"
 
+  # Bench — measure top-K accuracy against a ground-truth file
+  agent-skills bench truth.jsonl
+  agent-skills bench truth.jsonl --rerank-mode global --json | jq .top1
+
 Exit codes:
   0 success
-  1 runtime error
+  1 runtime error (also: bench had ≥1 failed query)
   2 usage error (missing arg, malformed flag)
   3 not found (file or remote resource unreachable)
   5 validation error (skill non-conformant, args invalid)
@@ -303,6 +310,39 @@ const main = async (): Promise<void> => {
     });
     printQueryResult(result, asJson);
     process.exit(EXIT.OK);
+  }
+
+  if (cmd === "bench") {
+    const truthFile = args.positional[1];
+    if (truthFile === undefined) {
+      throw new CliError(EXIT.USAGE, "bench: missing <truth-file> argument");
+    }
+    const kFlag = args.flags.get("k");
+    const k = typeof kFlag === "string" ? Number(kFlag) : undefined;
+    const noFilter = args.flags.get("no-filter") === true;
+    const noRerank = args.flags.get("no-rerank") === true;
+    const rerankModeFlag = args.flags.get("rerank-mode");
+    let rerankMode: "global" | "intent-conditional" | "none" = "intent-conditional";
+    if (typeof rerankModeFlag === "string") {
+      if (rerankModeFlag === "global" || rerankModeFlag === "intent-conditional" || rerankModeFlag === "none") {
+        rerankMode = rerankModeFlag;
+      } else {
+        throw new CliError(EXIT.USAGE, `--rerank-mode must be one of: intent-conditional | global | none`);
+      }
+    }
+    if (noRerank) rerankMode = "none";
+    const embedder = resolveEmbedderFromEnv({ provider: providerOverride });
+    const result = await runBench({
+      truthFile,
+      bank,
+      embedder,
+      k,
+      rerankMode,
+      filterApplicable: !noFilter,
+    });
+    printBenchResult(result, asJson);
+    // Non-zero exit when any failure is present, so CI treats <100% top-1 as a regression.
+    process.exit(result.failures.length > 0 ? EXIT.RUNTIME : EXIT.OK);
   }
 
   if (cmd === "exec") {

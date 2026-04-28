@@ -2,6 +2,19 @@
 
 Empirical validation of the agent-skills retrieval design against the public [`agent-skills-pack@v1.0.0`](https://github.com/MauricioPerera/agent-skills-pack) corpus (7 skills), embedded with Cloudflare Workers AI.
 
+> **🔁 Reproduce locally with one command (v0.7.0+)**
+>
+> ```bash
+> # Local with Ollama, no credentials needed
+> ollama pull embeddinggemma
+> EMBEDDING_PROVIDER=ollama OLLAMA_MODEL=embeddinggemma \
+>   agent-skills sync github.com/MauricioPerera/agent-skills-pack@main
+> EMBEDDING_PROVIDER=ollama OLLAMA_MODEL=embeddinggemma \
+>   agent-skills bench bench-truth.jsonl
+> ```
+>
+> The truth file ships in [`agent-skills-pack/bench-truth.jsonl`](https://github.com/MauricioPerera/agent-skills-pack/blob/main/bench-truth.jsonl) (35 paraphrases × 7 skills). Live result on `ollama:embeddinggemma`: **34/35 top-1 (97.1 %), 35/35 top-3 (100 %), mean margin +0.175**.
+
 ## TL;DR
 
 | Test | Result |

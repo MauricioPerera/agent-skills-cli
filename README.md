@@ -13,7 +13,30 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
-**v0.6.0** — multi-provider embeddings. The CLI now works against:
+**v0.7.0** — `bench` subcommand for reproducible retrieval evaluation. Anyone can verify the empirical claims in BENCHMARK.md against their own bank, with their own provider, and their own ground truth file:
+
+```bash
+$ agent-skills bench bench-truth.jsonl
+Bench against 35 queries
+  truth: bench-truth.jsonl
+  model: ollama:embeddinggemma | rerank=intent-conditional | filter=on
+
+  top-1:  34/35 (97.1%)
+  top-3:  35/35 (100.0%)
+  top-5:  35/35 (100.0%)
+  mean top-1 score:  0.551
+  mean margin (top-1 → top-2):  +0.175
+  elapsed: 42306ms
+
+Failures (1):
+  ✗ "read what's at this https url"
+      expected: http-get (rank 2, score 0.450)
+      got:      read-file (score 0.464)
+```
+
+Use `--json` for CI integration; non-zero exit when any query fails (so a regression breaks the build).
+
+**v0.6.0** — multi-provider embeddings. The CLI works against:
 
 - **Cloudflare Workers AI** (`bge-base-en-v1.5` / `bge-large` / `bge-m3` / `embeddinggemma`).
 - **Ollama** (local, zero credentials, zero network egress — `nomic-embed-text` by default).
@@ -263,6 +286,65 @@ $ agent-skills audit --skill github.com/.../base64-encode --json | jq '.[] | {ti
 
 The audit log is **local only** (per [SPEC §8 P3](https://github.com/MauricioPerera/agent-skills/blob/main/SPEC.md#8-privacy-invariants)) — it never leaves your machine.
 
+### `agent-skills bench <truth-file>` *(v0.7.0+)*
+
+Measure top-K retrieval accuracy against a ground-truth file of `(intent, expected_skill_id)` pairs. Same code path as `query`, so the numbers match what the agent would actually see.
+
+**Truth file format** (auto-detected by first non-whitespace char):
+
+```jsonl
+# JSONL — one entry per line, blank lines and # comments OK
+{"intent": "fetch the contents of a URL", "expected": "http-get"}
+{"intent": "encode a string as base64", "expected": "base64-encode"}
+```
+
+```json
+[
+  { "intent": "fetch the contents of a URL", "expected": "http-get" },
+  { "intent": "encode a string as base64", "expected": "base64-encode" }
+]
+```
+
+`expected` is the skill's short id (the frontmatter `id` field), not the full identity — so truth files stay portable across skill-pack revisions. The bench fails fast if any `expected` doesn't resolve to exactly one installed skill.
+
+**Output**:
+
+```bash
+$ agent-skills bench bench-truth.jsonl
+Bench against 35 queries
+  truth: bench-truth.jsonl
+  model: ollama:embeddinggemma | rerank=intent-conditional | filter=on
+
+  top-1:  34/35 (97.1%)
+  top-3:  35/35 (100.0%)
+  top-5:  35/35 (100.0%)
+  mean top-1 score:  0.551
+  mean margin (top-1 → top-2):  +0.175
+  elapsed: 42306ms
+
+Failures (1):
+  ✗ "read what's at this https url"
+      expected: http-get (rank 2, score 0.450)
+      got:      read-file (score 0.464)
+```
+
+**Flags**:
+- `--k N` — report top-K (default 5). top-1 and top-3 always shown.
+- `--rerank-mode <mode>` — same options as `query`: `intent-conditional` (default) | `global` | `none`.
+- `--no-rerank` — shortcut for `--rerank-mode none`.
+- `--no-filter` — disable applicable_when filtering during the bench.
+- `--embedding-provider <p>` — override env auto-detect.
+- `--json` — emit a machine-readable result (every per-query row + summary).
+
+**CI integration**: the CLI exits non-zero when `failures.length > 0`, so a regression breaks the build.
+
+```bash
+agent-skills bench bench-truth.jsonl --json > result.json
+[ "$(jq '.top1' result.json)" -ge 35 ] || exit 1
+```
+
+The public skill pack ships its own truth file at [`agent-skills-pack/bench-truth.jsonl`](https://github.com/MauricioPerera/agent-skills-pack/blob/main/bench-truth.jsonl) — 35 paraphrases × 7 skills.
+
 ## Library usage
 
 The CLI is also a library, importable in your own TypeScript:
@@ -305,11 +387,12 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.3.0 | shipped | + `exec` (bash subprocess + 3-stage kill ladder + sensitive-arg redaction) + `audit` (append-only JSONL log); closes agent loop end-to-end |
 | v0.4.0 | shipped | + audit-based rerank (`α·log(1+usage)` + recency); applicable_when host detection; 5-strategy benchmark exposing global-rerank failure mode |
 | v0.5.0 | shipped | + intent-conditional rerank as default (`IntentEmbeddingCache` + sim≥0.7 filter); fixes the 50-use stress failure with **100 % top-1** on live Workers AI |
-| **v0.6.0** | **shipped** | + Ollama (local, zero-credential) + OpenAI / OpenAI-compatible (Together / vLLM / TEI / infinity / …) embedding providers; auto-detect from env or `EMBEDDING_PROVIDER` flag; 217/217 tests |
-| v0.7.0 | planned | `publish` (skill author tooling); per-tenant audit scoping; `bench` subcommand (ground-truth top-K accuracy reporting) |
-| v0.8.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
-| v0.9.0 | planned | IVF-style ANN backend (swap-in for FileBank when catalog grows) |
-| v1.0.0 | planned | Stable API + full SPEC v1.0 coverage; **first npm publication** (under a final, owned name — current `agent-skills-cli` on npm is an unrelated squat) |
+| v0.6.0 | shipped | + Ollama (local, zero-credential) + OpenAI / OpenAI-compatible (Together / vLLM / TEI / infinity / …) embedding providers; auto-detect from env or `EMBEDDING_PROVIDER` flag |
+| v0.6.1 | shipped | + 4 code-review patches (docstring, pure-Node PATH scan, ENOENT discrimination, bounded-concurrency sync) |
+| **v0.7.0** | **shipped** | + `bench` subcommand: reproducible top-K accuracy against a JSONL/JSON-array truth file. CI integration via JSON output + non-zero exit on any failure. 240/240 tests |
+| v0.8.0 | planned | `publish` (skill author tooling: validate + stamp + git tag) + per-tenant audit scoping |
+| v0.9.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
+| v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
 ## Sister projects
 
