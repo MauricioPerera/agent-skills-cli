@@ -259,7 +259,7 @@ jobs:
 
       # Pin to a known-good CLI version; bump intentionally on review.
       - name: Install agent-skills CLI
-        run: npm install -g @mauricioperera/agent-skills-cli@0.18.0
+        run: npm install -g @rckflr/agent-skills-cli@0.18.1
 
       - name: Validate every SKILL.md and confirm skills-index.json is up-to-date
         run: agent-skills publish --check-only
@@ -279,7 +279,7 @@ jobs:
   #         CF_ACCOUNT_ID: \${{ secrets.CF_ACCOUNT_ID }}
   #         CF_API_TOKEN: \${{ secrets.CF_API_TOKEN }}
   #       run: |
-  #         npm install -g @mauricioperera/agent-skills-cli@0.18.0
+  #         npm install -g @rckflr/agent-skills-cli@0.18.1
   #         agent-skills sync github.com/\${{ github.repository }}@\${{ github.sha }}
   #         agent-skills bench bench-truth.jsonl
 `;

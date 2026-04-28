@@ -27,8 +27,8 @@ If your tool is different, the shape stays the same; only the `command_template`
 - **The CLI installed:**
 
   ```bash
-  npm install -g @mauricioperera/agent-skills-cli
-  agent-skills --version  # 0.18.0 or later
+  npm install -g @rckflr/agent-skills-cli
+  agent-skills --version  # 0.18.1 or later
   ```
 
 - **For the example skill:** the [GitHub CLI (`gh`)](https://cli.github.com/) authenticated. The skill we're writing wraps `gh pr view`, so the running environment needs it. Authors don't need any special tooling beyond the CLI above.
