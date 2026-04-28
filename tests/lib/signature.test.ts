@@ -252,7 +252,7 @@ MIIBuAYJKoZIhvcNAQcCoIIBqTCCAaUCAQExDzANBglghkgBZQMEAgEFADALBgkq...
 describe("verifyGitHubTag — signature method propagated to result", () => {
   // Reuse the mockFetch + okJson helpers from the top of the file.
   const mockFetch = (handler: (url: string) => Response): typeof fetch =>
-    (async (url) => handler(url.toString())) as unknown as typeof fetch;
+    (async (url: string | URL | Request) => handler(url.toString())) as unknown as typeof fetch;
   const okJson = (body: unknown): Response =>
     new Response(JSON.stringify(body), {
       status: 200,
