@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import {
   parseRekorEntry,
   fetchRekorEntry,
+  findRekorEntryByHash,
   REKOR_PUBLIC_HOST,
 } from "../../src/lib/rekor.js";
 import { CliError } from "../../src/lib/errors.js";
@@ -174,5 +175,81 @@ describe("fetchRekorEntry — input validation + transport errors", () => {
     };
     await fetchRekorEntry("1".repeat(64), spyingFetch);
     expect(observedUrl.startsWith(`${REKOR_PUBLIC_HOST}/api/v1/log/entries/`)).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// findRekorEntryByHash — Rekor index/retrieve wrapper (v0.17.1+)
+// ────────────────────────────────────────────────────────────────────
+
+describe("findRekorEntryByHash — input validation + transport", () => {
+  const validHash = "393d4b96fe4e0eae0fc313f5f8947c2a9782f189604d9f47ba7a66c709f2326e";
+
+  it("rejects non-hex / wrong-length / uppercase hash before network call", async () => {
+    let called = false;
+    const fakeFetch: typeof fetch = async () => {
+      called = true;
+      return new Response("[]", { status: 200 });
+    };
+    await expect(findRekorEntryByHash("not-hex", fakeFetch)).rejects.toThrow(
+      /64-char lower-case hex/,
+    );
+    await expect(findRekorEntryByHash("a".repeat(63), fakeFetch)).rejects.toThrow(
+      /64-char lower-case hex/,
+    );
+    await expect(findRekorEntryByHash(validHash.toUpperCase(), fakeFetch)).rejects.toThrow(
+      /lower-case/,
+    );
+    expect(called).toBe(false);
+  });
+
+  it("POSTs to /api/v1/index/retrieve with a sha256: prefix on the hash", async () => {
+    let observedUrl = "";
+    let observedBody: unknown = null;
+    let observedMethod = "";
+    const spyingFetch: typeof fetch = async (input, init) => {
+      observedUrl = String(input);
+      observedMethod = init?.method ?? "";
+      observedBody = init?.body ? JSON.parse(init.body as string) : null;
+      return new Response("[]", { status: 200 });
+    };
+    await findRekorEntryByHash(validHash, spyingFetch);
+    expect(observedUrl).toBe(`${REKOR_PUBLIC_HOST}/api/v1/index/retrieve`);
+    expect(observedMethod).toBe("POST");
+    expect(observedBody).toEqual({ hash: `sha256:${validHash}` });
+  });
+
+  it("returns the array of UUIDs verbatim on a 200 response", async () => {
+    const fakeFetch: typeof fetch = async () =>
+      new Response(JSON.stringify(["abc123", "def456"]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    const result = await findRekorEntryByHash(validHash, fakeFetch);
+    expect(result).toEqual(["abc123", "def456"]);
+  });
+
+  it("returns empty array (no error) when Rekor finds no matching entries", async () => {
+    // Real Rekor behavior: empty array means the hash isn't on a current
+    // shard. v0.18 verifiers should treat this distinctly from "found but
+    // proof failed" — see rekor.ts jsdoc on findRekorEntryByHash.
+    const fakeFetch: typeof fetch = async () =>
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    const result = await findRekorEntryByHash(validHash, fakeFetch);
+    expect(result).toEqual([]);
+  });
+
+  it("surfaces non-200 responses as CliError", async () => {
+    const fakeFetch500: typeof fetch = async () =>
+      new Response("oops", { status: 500, statusText: "Internal Server Error" });
+    await expect(findRekorEntryByHash(validHash, fakeFetch500)).rejects.toThrow(/500/);
+  });
+
+  it("rejects non-array response shape", async () => {
+    const fakeFetch: typeof fetch = async () =>
+      new Response('{"unexpected": "object"}', { status: 200 });
+    await expect(findRekorEntryByHash(validHash, fakeFetch)).rejects.toThrow(
+      /did not return an array/,
+    );
   });
 });

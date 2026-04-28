@@ -146,12 +146,17 @@ export type {
   SignatureVerification,
 } from "./lib/signature.js";
 
-// CMS / Sigstore identity extraction (v0.16.0+)
-export { extractSigstoreIdentity } from "./lib/cms.js";
+// CMS / Sigstore identity extraction (v0.16.0+) + gitsign Rekor lookup hash (v0.17.1+)
+export { extractSigstoreIdentity, computeGitsignRekorLookupHash } from "./lib/cms.js";
 export type { SigstoreIdentity } from "./lib/cms.js";
 
 // Rekor entry parsing + lookup (v0.17.0+ — parsing only; verification queued)
-export { parseRekorEntry, fetchRekorEntry, REKOR_PUBLIC_HOST } from "./lib/rekor.js";
+export {
+  parseRekorEntry,
+  fetchRekorEntry,
+  findRekorEntryByHash,
+  REKOR_PUBLIC_HOST,
+} from "./lib/rekor.js";
 export type {
   RekorEntry,
   RekorInclusionProof,

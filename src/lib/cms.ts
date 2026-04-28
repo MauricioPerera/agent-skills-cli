@@ -23,7 +23,7 @@
 //   3. We need ~5% of CMS — just the path to the first cert. A full CMS
 //      parser would be ~10x the code with no extra value.
 
-import { X509Certificate } from "node:crypto";
+import { X509Certificate, createHash } from "node:crypto";
 
 /** Result of extracting the Sigstore identity claim from a CMS payload. */
 export interface SigstoreIdentity {
@@ -271,4 +271,150 @@ export const extractSigstoreIdentity = (
     subject_type: parsed.subject_type,
     ...(issuer !== undefined ? { issuer } : {}),
   };
+};
+
+// ────────────────────────────────────────────────────────────────────
+// gitsign Rekor lookup hash (v0.17.1+, Phase 1.5 of Level 4 work)
+// ────────────────────────────────────────────────────────────────────
+//
+// gitsign submits Rekor entries indexed by SHA-256 of the SignerInfo's
+// SignedAttrs "marshaled for verification" (RFC 5652 §5.4 / gitsign's
+// internal/signature/sign.go calls signedAttrs.MarshaledForVerification()
+// and sha256s the result before pkg/rekor/rekor.go's WriteMessage).
+//
+// "Marshaled for verification" means: take the [0] IMPLICIT signedAttrs
+// from inside the SignerInfo and re-encode it with an explicit SET tag
+// (0x31) instead of the implicit context-specific [0] (0xa0). The body
+// bytes and length are unchanged — only the outer tag byte differs.
+//
+// This is the hash a Level 4 verifier uses to locate the corresponding
+// Rekor entry via /api/v1/index/retrieve { "hash": "sha256:<hex>" }.
+//
+// IMPORTANT: this function returns the LOOKUP HASH only. It does NOT
+// verify the signature, the inclusion proof, or the cert chain. A v0.18+
+// verifier consumes this hash, fetches the matching entry, then runs the
+// seven-step Level 4 verification specified in SPEC §5.4.
+
+/**
+ * Walk a CMS payload to its first SignerInfo's SignedAttrs and return the
+ * raw inner bytes (the Attribute SEQUENCEs) + the [0]-tagged TLV span.
+ * Internal helper; returns null on any malformed structure.
+ */
+const extractSignedAttrsBytes = (pemSignature: string): {
+  innerBytes: Uint8Array;
+} | null => {
+  const start = pemSignature.indexOf(PEM_OPEN);
+  if (start < 0) return null;
+  const end = pemSignature.indexOf(PEM_CLOSE, start + PEM_OPEN.length);
+  if (end < 0) return null;
+  const b64 = pemSignature.slice(start + PEM_OPEN.length, end).replace(/\s+/g, "");
+  let der: Uint8Array;
+  try {
+    der = Buffer.from(b64, "base64");
+  } catch {
+    return null;
+  }
+  if (der.length === 0) return null;
+
+  try {
+    // ContentInfo -> [0] EXPLICIT -> SignedData SEQUENCE
+    const ci = readTLV(der, 0);
+    if (ci.tag !== 0x30) return null;
+    let off = ci.valueOff;
+    const oid = readTLV(der, off);
+    off += oid.totalLen;
+    const explicit = readTLV(der, off);
+    if (explicit.tag !== 0xa0) return null;
+    const sd = readTLV(der, explicit.valueOff);
+    if (sd.tag !== 0x30) return null;
+
+    // Walk SignedData children. SignerInfos is the LAST SET (tag 0x31) —
+    // the digestAlgorithms SET comes earlier. Take the last one.
+    let p = sd.valueOff;
+    const sdEnd = sd.valueOff + sd.valueLen;
+    let signerInfosTLV: TLV | null = null;
+    while (p < sdEnd) {
+      const t = readTLV(der, p);
+      if (t.tag === 0x31) signerInfosTLV = t;
+      p += t.totalLen;
+    }
+    if (!signerInfosTLV) return null;
+
+    // First SignerInfo SEQUENCE inside the set.
+    const si = readTLV(der, signerInfosTLV.valueOff);
+    if (si.tag !== 0x30) return null;
+
+    // Walk SignerInfo children to find signedAttrs ([0] IMPLICIT, tag 0xa0).
+    // Order per RFC 5652 §5.3:
+    //   version INTEGER, sid CHOICE, digestAlgorithm,
+    //   [0] IMPLICIT signedAttrs OPTIONAL, ...
+    let sip = si.valueOff;
+    const siEnd = si.valueOff + si.valueLen;
+    while (sip < siEnd) {
+      const t = readTLV(der, sip);
+      if (t.tag === 0xa0) {
+        return { innerBytes: der.subarray(t.valueOff, t.valueOff + t.valueLen) };
+      }
+      sip += t.totalLen;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * DER-encode a length value per X.690 §8.1.3.
+ * 0..127 → single byte; otherwise long form: 0x80|n + n big-endian length bytes.
+ */
+const encodeDerLength = (n: number): Uint8Array => {
+  if (n < 128) return Uint8Array.of(n);
+  if (n < 256) return Uint8Array.of(0x81, n);
+  if (n < 65536) return Uint8Array.of(0x82, (n >>> 8) & 0xff, n & 0xff);
+  if (n < 16777216) return Uint8Array.of(0x83, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff);
+  return Uint8Array.of(
+    0x84,
+    (n >>> 24) & 0xff,
+    (n >>> 16) & 0xff,
+    (n >>> 8) & 0xff,
+    n & 0xff,
+  );
+};
+
+/**
+ * Compute the gitsign-flavor Rekor lookup hash for a CMS payload.
+ *
+ * Returns the lower-case hex SHA-256 of the SignerInfo's SignedAttrs
+ * marshaled for verification (the [0]-tagged signedAttrs re-encoded with
+ * the SET tag 0x31, length and content unchanged).
+ *
+ * Use this hash to locate the corresponding Rekor entry via
+ * `/api/v1/index/retrieve` (see `findRekorEntryByHash` in rekor.ts).
+ * A v0.18+ Level 4 verifier then runs the seven-step verification from
+ * SPEC §5.4.2 against the located entry.
+ *
+ * Returns undefined if the input isn't a parseable Sigstore CMS payload
+ * or the SignedAttrs aren't present (some non-gitsign signers omit them,
+ * in which case there's no Rekor entry to look up via this path).
+ *
+ * The lookup hash is structurally validated by an invariant a v0.18
+ * verifier MUST also check: the `messageDigest` attribute *inside* the
+ * SignedAttrs equals SHA-256 of the original signed payload. Tests in
+ * cms.test.ts verify this invariant against the real gitsign fixture.
+ */
+export const computeGitsignRekorLookupHash = (
+  pemSignature: string | null | undefined,
+): string | undefined => {
+  if (typeof pemSignature !== "string" || pemSignature.length === 0) return undefined;
+  const extracted = extractSignedAttrsBytes(pemSignature);
+  if (!extracted) return undefined;
+
+  // Re-frame: SET tag (0x31) + DER-length + content bytes (unchanged).
+  const lenEnc = encodeDerLength(extracted.innerBytes.length);
+  const reframed = Buffer.concat([
+    Buffer.of(0x31),
+    Buffer.from(lenEnc),
+    Buffer.from(extracted.innerBytes),
+  ]);
+  return createHash("sha256").update(reframed).digest("hex");
 };

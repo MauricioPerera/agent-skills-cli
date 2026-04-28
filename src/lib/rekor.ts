@@ -246,6 +246,68 @@ export const parseRekorEntry = (apiResponse: unknown): RekorEntry => {
 };
 
 /**
+ * Look up Rekor entry UUIDs by an artifact hash. Wraps Rekor's
+ *   POST /api/v1/index/retrieve { "hash": "sha256:<hex>" }
+ *
+ * For gitsign-signed git tags, compute the lookup hash with
+ * `computeGitsignRekorLookupHash` from cms.ts (gitsign hashes the
+ * SignerInfo's SignedAttrs marshaled-for-verification, NOT the raw
+ * signed payload — see SPEC §5.4.2 step 3 for the framing rationale).
+ *
+ * Returns an array of UUIDs (may be empty if no entry matches; this is
+ * NOT an error — old or rotated Rekor shards may have pruned entries
+ * even when the signing event was real, and a v0.18 verifier will need
+ * to handle "no entry found" as a distinct outcome from "entry found
+ * but proof invalid").
+ *
+ * `hashHex` is a 64-char lower-case hex SHA-256 (the function does not
+ * accept a sha256: prefix; it adds one before sending to Rekor).
+ */
+export const findRekorEntryByHash = async (
+  hashHex: string,
+  fetchImpl: typeof fetch = fetch,
+  host: string = REKOR_PUBLIC_HOST,
+): Promise<string[]> => {
+  if (!/^[a-f0-9]{64}$/.test(hashHex)) {
+    throw new CliError(
+      EXIT.VALIDATION,
+      `rekor: hash must be 64-char lower-case hex SHA-256, got '${hashHex}'`,
+    );
+  }
+  const url = `${host}/api/v1/index/retrieve`;
+  let res: Response;
+  try {
+    res = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ hash: `sha256:${hashHex}` }),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new CliError(EXIT.RUNTIME, `rekor: index/retrieve failed: ${msg}`);
+  }
+  if (!res.ok) {
+    throw new CliError(
+      EXIT.RUNTIME,
+      `rekor: index/retrieve returned ${res.status} ${res.statusText}`,
+    );
+  }
+  const json = await res.json();
+  if (!Array.isArray(json)) {
+    throw new CliError(EXIT.RUNTIME, "rekor: index/retrieve did not return an array");
+  }
+  for (const u of json) {
+    if (typeof u !== "string") {
+      throw new CliError(EXIT.RUNTIME, "rekor: index/retrieve array contains non-string");
+    }
+  }
+  return json;
+};
+
+/**
  * Fetch a single Rekor entry by UUID from the public Sigstore instance.
  *
  * Returns the parsed RekorEntry. The fetch path is:
