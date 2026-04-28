@@ -173,7 +173,7 @@ Full methodology, all 5 strategies compared, failure breakdowns, and operator tu
 
 ```bash
 # Clone a tagged release
-git clone --depth 1 --branch v0.5.0 https://github.com/MauricioPerera/agent-skills-cli
+git clone --depth 1 --branch v0.13.1 https://github.com/MauricioPerera/agent-skills-cli
 cd agent-skills-cli
 npm install
 npm run build
@@ -192,7 +192,7 @@ npm install /path/to/agent-skills-cli
 The CLI will be published to npm once the public API is frozen at v1.0. Until then, pin to a tagged commit in `package.json`:
 
 ```json
-"agent-skills-cli": "github:MauricioPerera/agent-skills-cli#v0.5.0"
+"agent-skills-cli": "github:MauricioPerera/agent-skills-cli#v0.13.1"
 ```
 
 ## End-to-end demo
@@ -637,7 +637,9 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.10.0 | shipped | + signed-tag verification at sync time. Closes the SECURITY.md tag-tampering threat model |
 | v0.11.0 | shipped | + `update` command: re-resolve subscribed refs, re-sync only on movement, GC orphan files from old SHAs, per-skill diff |
 | v0.12.0 | shipped | + per-tenant audit scoping (`--tenant <id>` on exec/query/bench); intent-conditional rerank filters by tenant; SPEC §4.5.1 |
-| **v0.13.0** | **shipped** | Cleanup + correctness: listSkills caching (perf), remove deprecated `rerank_applied` field, fix update.ts GC for multi-subscription edge case. 357/357 tests |
+| v0.13.0 | shipped | Cleanup + correctness: listSkills caching (perf), remove deprecated `rerank_applied` field, fix update.ts GC for multi-subscription edge case |
+| v0.13.1 | shipped | + listAudit caching (closes the last perf debt from the post-v0.11 code review). 363/363 tests; 8/10 review issues fixed |
+| **v0.13.2** | **shipped** | Docs alignment patch: stale install/version refs across READMEs, init scaffolded CI workflow now pins v0.13.1, BENCHMARK.md updated. Plus a hotfix for a CI type-check break introduced in v0.13.1 |
 | v0.14.0 | planned | Sigstore + Rekor (Level 4) — keyless signing with public transparency log |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
@@ -654,7 +656,7 @@ Runs on every push, on PR, and weekly via cron — the cron picks up sister-repo
 
 ## Sister projects
 
-- [`agent-skills`](https://github.com/MauricioPerera/agent-skills) — the **canonical specification** (v0.2.0).
+- [`agent-skills`](https://github.com/MauricioPerera/agent-skills) — the **canonical specification** (v0.3.0).
 - [`agent-skills-pack`](https://github.com/MauricioPerera/agent-skills-pack) — **example skill pack** with 7 production-ready skills + `bench-truth.jsonl`. Integration test corpus for this CLI.
 - [`agent-skills-py-proof`](https://github.com/MauricioPerera/agent-skills-py-proof) — **510-line Python implementation** that produces bit-identical retrieval scores to this CLI. Cross-implementation validation of the spec.
 - [`just-bash-data`](https://github.com/MauricioPerera/just-bash-data) — alternative **storage runtime** providing `db` (document store) + `vec` (vector search) primitives.

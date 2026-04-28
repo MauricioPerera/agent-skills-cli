@@ -260,7 +260,7 @@ jobs:
       # Until agent-skills-cli is on npm, install from a tagged release.
       - name: Install agent-skills CLI
         run: |
-          git clone --depth 1 --branch v0.8.0 https://github.com/MauricioPerera/agent-skills-cli /tmp/cli
+          git clone --depth 1 --branch v0.13.1 https://github.com/MauricioPerera/agent-skills-cli /tmp/cli
           cd /tmp/cli && npm ci && npm run build && npm link
 
       - name: Validate every SKILL.md and confirm skills-index.json is up-to-date

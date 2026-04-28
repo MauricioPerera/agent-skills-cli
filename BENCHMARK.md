@@ -15,7 +15,7 @@ Empirical validation of the agent-skills retrieval design against the public [`a
 >
 > The truth file ships in [`agent-skills-pack/bench-truth.jsonl`](https://github.com/MauricioPerera/agent-skills-pack/blob/main/bench-truth.jsonl) (35 paraphrases × 7 skills). Live result on `ollama:embeddinggemma`: **34/35 top-1 (97.1 %), 35/35 top-3 (100 %), mean margin +0.175**.
 >
-> **Cross-implementation parity (spec v0.2 validation)**: a 510-line Python implementation built from the spec only, [`agent-skills-py-proof`](https://github.com/MauricioPerera/agent-skills-py-proof), reproduces these numbers **bit-for-bit on the same setup**. Top-1, top-3, mean score, mean margin, sole failure paraphrase — all identical to 4 decimal places. The spec is now specified, not just documented; alternative implementations don't have to reverse-engineer it.
+> **Cross-implementation parity (spec v0.2+ validation)**: a single-file Python implementation built from the spec only, [`agent-skills-py-proof`](https://github.com/MauricioPerera/agent-skills-py-proof), reproduces these numbers **bit-for-bit on the same setup**. Top-1, top-3, mean score, mean margin, sole failure paraphrase — all identical to 4 decimal places, plus `signature.status` and `signature.reason` (per SPEC §5.1) parity-checked on every push. The spec is now specified, not just documented; alternative implementations don't have to reverse-engineer it.
 
 ## TL;DR
 
