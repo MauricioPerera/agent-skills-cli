@@ -1,38 +1,72 @@
 // CLI entrypoint for `agent-skills`. Invoked via the bin shim in package.json.
 
+import { FileBank, defaultBankRoot } from "./lib/bank.js";
+import { createCloudflareEmbedder } from "./lib/embed.js";
 import { CliError, EXIT, isCliError } from "./lib/errors.js";
 import { printResolveResult, runResolve } from "./commands/resolve.js";
 import { printValidateResult, runValidate } from "./commands/validate.js";
+import { runSync } from "./commands/sync.js";
+import { printQueryResult, runQuery } from "./commands/query.js";
 
-const VERSION = "0.2.0-alpha.0";
+const VERSION = "0.2.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
 Usage:
   agent-skills <command> [args] [flags]
 
-Commands:
+Commands (local, no network):
   validate <file>                  Validate a SKILL.md against the spec.
   resolve <file> --args <json>     Substitute placeholders and print the
                                    resolved command (does NOT execute).
+
+Commands (network — require Cloudflare Workers AI credentials):
+  sync <repo>[@<ref>]              Fetch + embed + index skills from a git source.
+                                   Default ref: main.
+  query "<intent>" [--k N]         Find the top-K skills matching an intent.
+  list                             List all subscriptions in the local bank.
+  reset                            Wipe all bank state (asks for confirmation).
+
+Other:
   help                             Show this help.
   version                          Print version.
 
 Flags (per command):
   --json                Output machine-readable JSON instead of text.
   --skip-validation     (resolve only) Skip schema validation before substituting.
-                        NOT RECOMMENDED — exists for testing non-conformant skills.
+  --k N                 (query) Top-K hits to return. Default 5.
+  --bank-dir <path>     Override default bank state directory.
+
+Cloudflare Workers AI environment (for sync + query):
+  CF_ACCOUNT_ID         Your Cloudflare account ID (32 hex chars).
+  CF_API_TOKEN          API token with Workers AI permission.
+  CF_EMBEDDING_MODEL    Optional model override; default: @cf/baai/bge-base-en-v1.5
+                        Other options: @cf/baai/bge-small-en-v1.5 (384-dim, faster)
+                                       @cf/baai/bge-large-en-v1.5 (1024-dim, slower)
+                                       @cf/baai/bge-m3            (1024-dim, multilingual)
+
+Default bank state: ${defaultBankRoot()}
 
 Examples:
-  agent-skills validate skills/charge-customer/SKILL.md
-  agent-skills resolve skills/charge-customer/SKILL.md \\
-    --args '{"amount":1000,"currency":"usd","customer_id":"cus_X"}'
+  # Validate
+  agent-skills validate skills/x/SKILL.md
+
+  # Resolve (substitute args, don't execute)
+  agent-skills resolve skills/x/SKILL.md --args '{"amount":1000}'
+
+  # Sync a public skill pack
+  export CF_ACCOUNT_ID=...
+  export CF_API_TOKEN=...
+  agent-skills sync github.com/MauricioPerera/agent-skills-pack@v1.0.0
+
+  # Query — find skills matching an intent
+  agent-skills query "I need to fetch data from a URL"
 
 Exit codes:
   0 success
   1 runtime error
-  2 usage error (missing arg, malformed flag, etc.)
-  3 not found (file unreadable)
+  2 usage error (missing arg, malformed flag)
+  3 not found (file or remote resource unreachable)
   5 validation error (skill non-conformant, args invalid)
 
 Spec: https://github.com/MauricioPerera/agent-skills
@@ -115,6 +149,109 @@ const main = async (): Promise<void> => {
       skipValidation,
     });
     printResolveResult(result, asJson);
+    process.exit(EXIT.OK);
+  }
+
+  // Network commands below — require bank + embedder
+  const bankDir = args.flags.get("bank-dir");
+  const bank = new FileBank({
+    rootDir: typeof bankDir === "string" ? bankDir : undefined,
+  });
+
+  if (cmd === "list") {
+    const subs = await bank.listSubscriptions();
+    const meta = await bank.getMeta();
+    if (asJson) {
+      process.stdout.write(JSON.stringify({ bank_root: bank.root, meta, subscriptions: subs }) + "\n");
+    } else {
+      process.stdout.write(`Bank: ${bank.root}\n`);
+      if (meta) {
+        process.stdout.write(`Embedding: ${meta.embedding_model} (${meta.embedding_dim}-dim)\n`);
+      } else {
+        process.stdout.write(`Embedding: (not yet initialized)\n`);
+      }
+      process.stdout.write(`Subscriptions: ${subs.length}\n`);
+      for (const s of subs) {
+        process.stdout.write(`  - ${s.id}\n`);
+        process.stdout.write(`    repo: ${s.repo ?? "n/a"}\n`);
+        process.stdout.write(`    requested: ${s.ref_requested ?? "n/a"}\n`);
+        process.stdout.write(`    resolved:  ${s.ref_resolved ?? "(not synced yet)"}\n`);
+        process.stdout.write(`    last_synced: ${s.last_synced ?? "(never)"}\n`);
+      }
+    }
+    process.exit(EXIT.OK);
+  }
+
+  if (cmd === "reset") {
+    if (args.flags.get("yes") !== true) {
+      throw new CliError(
+        EXIT.USAGE,
+        `reset will DELETE all bank state at ${bank.root}. Pass --yes to confirm.`,
+      );
+    }
+    await bank.reset();
+    process.stdout.write(`reset: ${bank.root} cleared\n`);
+    process.exit(EXIT.OK);
+  }
+
+  // Embedder is needed for sync + query
+  const accountId = process.env["CF_ACCOUNT_ID"];
+  const apiToken = process.env["CF_API_TOKEN"];
+  const embeddingModel = process.env["CF_EMBEDDING_MODEL"];
+
+  if (cmd === "sync" || cmd === "query") {
+    if (!accountId || !apiToken) {
+      throw new CliError(
+        EXIT.AUTH,
+        `${cmd}: CF_ACCOUNT_ID and CF_API_TOKEN env vars are required.\nGet them at https://dash.cloudflare.com/profile/api-tokens (token needs 'Workers AI' permission).`,
+      );
+    }
+  }
+
+  if (cmd === "sync") {
+    const source = args.positional[1];
+    if (source === undefined) {
+      throw new CliError(EXIT.USAGE, "sync: missing <repo>[@<ref>] argument");
+    }
+    const embedder = createCloudflareEmbedder({
+      accountId: accountId as string,
+      apiToken: apiToken as string,
+      model: embeddingModel,
+    });
+    const result = await runSync({ source, bank, embedder });
+    if (asJson) {
+      process.stdout.write(JSON.stringify(result) + "\n");
+    } else {
+      process.stdout.write(`Synced ${result.source}\n`);
+      process.stdout.write(`  ref: ${result.ref_requested} → ${result.ref_resolved}\n`);
+      process.stdout.write(`  total: ${result.total} | synced: ${result.synced} | invalid: ${result.invalid} | errored: ${result.errored}\n\n`);
+      for (const r of result.skills) {
+        const icon = r.status === "synced" ? "✓" : r.status === "invalid" ? "✗" : "!";
+        process.stdout.write(`  ${icon} ${r.id}`);
+        if (r.message) process.stdout.write(` — ${r.message}`);
+        process.stdout.write("\n");
+        if (r.errors) {
+          for (const e of r.errors) process.stdout.write(`     ${e.path}: ${e.message}\n`);
+        }
+      }
+    }
+    process.exit(result.errored > 0 ? EXIT.RUNTIME : EXIT.OK);
+  }
+
+  if (cmd === "query") {
+    const intent = args.positional[1];
+    if (intent === undefined) {
+      throw new CliError(EXIT.USAGE, 'query: missing "<intent>" argument');
+    }
+    const kFlag = args.flags.get("k");
+    const k = typeof kFlag === "string" ? Number(kFlag) : undefined;
+    const embedder = createCloudflareEmbedder({
+      accountId: accountId as string,
+      apiToken: apiToken as string,
+      model: embeddingModel,
+    });
+    const result = await runQuery({ intent, k, bank, embedder });
+    printQueryResult(result, asJson);
     process.exit(EXIT.OK);
   }
 

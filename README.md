@@ -13,7 +13,7 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
-**v0.2.0-alpha** — early reference. The library API and exit codes are stable enough to script against; expect minor iteration before v0.2.0 final.
+**v0.2.0** — first production reference. Implements local commands (`validate`, `resolve`) and network commands (`sync`, `query`, `list`, `reset`) backed by **Cloudflare Workers AI** for embeddings. End-to-end loop: subscribe to a skill pack on GitHub → embed every skill → query by intent → get back a resolved bash command.
 
 ## Install
 
@@ -22,6 +22,51 @@ npm i -g agent-skills-cli
 # or, no install
 npx agent-skills-cli validate skills/x/SKILL.md
 ```
+
+## End-to-end demo (with Cloudflare Workers AI)
+
+```bash
+# 1. Get Cloudflare credentials
+#    https://dash.cloudflare.com/profile/api-tokens
+#    Create a token with "Workers AI" permission.
+export CF_ACCOUNT_ID=<32-hex-account-id>
+export CF_API_TOKEN=<your-token>
+
+# 2. Sync a real skill pack (7 production-ready skills)
+$ agent-skills sync github.com/MauricioPerera/agent-skills-pack@v1.0.0
+Synced github.com/MauricioPerera/agent-skills-pack@v1.0.0
+  ref: v1.0.0 → 4f5a2c7e9b1d3f8a6c0e7d2b5f9a1c4e8d3b6a72
+  total: 7 | synced: 7 | invalid: 0 | errored: 0
+
+  ✓ http-get
+  ✓ http-post-json
+  ✓ github-issue-create
+  ✓ ripgrep-search
+  ✓ read-file
+  ✓ json-query
+  ✓ base64-encode
+
+# 3. Query by intent — agent finds the right skill on demand
+$ agent-skills query "I need to fetch the contents of a webpage"
+Top 5 skills for: "I need to fetch the contents of a webpage"
+Embedding model: cloudflare:@cf/baai/bge-base-en-v1.5
+
+1. [0.847] github.com/MauricioPerera/agent-skills-pack@.../http-get
+   Title: HTTP GET request
+   Use when: the user wants to fetch the contents of a URL...
+
+2. [0.612] github.com/MauricioPerera/agent-skills-pack@.../http-post-json
+   ...
+
+# 4. Resolve the chosen skill (substitute args, NOT execute)
+$ agent-skills resolve <(curl -fsSL https://cdn.jsdelivr.net/gh/MauricioPerera/agent-skills-pack@v1.0.0/skills/http-get/SKILL.md) --args '{"url":"https://example.com","timeout":15}'
+curl -fsSL --max-time 15 'https://example.com'
+
+# 5. Execute the resolved command (only if you trust the skill)
+$ agent-skills resolve ... --args '...' | bash
+```
+
+The agent's loop is: **embed intent → vector search → fetch metadata → resolve → execute**. With this CLI, every step is a single command.
 
 ## Commands
 
@@ -132,15 +177,24 @@ const urls = deriveUrls(id);
 
 Full type definitions are exported. See `src/types.ts`.
 
+## Update version of package.json
+
+Make sure your dependency line uses the published version:
+
+```json
+"agent-skills-cli": "^0.2.0"
+```
+
 ## Roadmap
 
-| Version | Goal |
-|---|---|
-| **v0.2.0-alpha** *(current)* | `validate` + `resolve` commands; library API for parse / validate / substitute / identity. |
-| v0.2.0 | Add `sync` command (Ollama embedding, just-bash-data integration). Conformance test suite. |
-| v0.3.0 | Add `query` + `exec` commands (run a skill end-to-end against a populated bank). |
-| v0.4.0 | Add `publish` command (validate + stamp + commit + tag). |
-| v1.0.0 | Stable API. Full coverage of SPEC v1.0. |
+| Version | Status | Scope |
+|---|---|---|
+| v0.2.0-alpha | shipped | `validate` + `resolve` (local-only) + library API |
+| **v0.2.0** | **shipped** | + `sync` + `query` + `list` + `reset`; Cloudflare Workers AI embeddings |
+| v0.3.0 | planned | `exec` (run resolved command + audit log); `publish` (skill author tooling); Ollama / OpenAI / generic HTTP embedding providers |
+| v0.4.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
+| v0.5.0 | planned | IVF-style ANN backend (swap-in for FileBank when catalog grows) |
+| v1.0.0 | planned | Stable API + full SPEC v1.0 coverage |
 
 ## Sister projects
 

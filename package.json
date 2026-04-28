@@ -1,6 +1,6 @@
 {
   "name": "agent-skills-cli",
-  "version": "0.2.0-alpha.0",
+  "version": "0.2.0",
   "description": "Reference CLI for the agent-skills specification: validate SKILL.md files and resolve command_template against arg values.",
   "license": "MIT",
   "author": "Mauricio Perera",

@@ -77,37 +77,11 @@ export interface SkillFrontmatter {
 }
 
 /**
- * Provenance is bank-computed at ingest, NOT in the file. SPEC.md §2.5.
- * Banks store this alongside the parsed frontmatter.
- */
-export interface Provenance {
-  source_type: "git" | "url";
-  source: string;
-  ref_resolved_to?: string;
-  ref_requested?: string;
-  fetched_at: string;
-  signature_status: "unsigned" | "valid" | "invalid" | "unverified";
-  signed_by?: string;
-  publisher_verified?: boolean;
-  embedding_truncated?: boolean;
-}
-
-/**
- * Full skill record as stored in a bank's index: frontmatter + provenance + bank-managed fields.
- */
-export interface IndexedSkill extends SkillFrontmatter {
-  identity: string; // full identity per SPEC §1
-  provenance?: Provenance;
-  inserted_at?: string;
-  updated_at?: string;
-  usage_count?: number;
-  avg_rating?: number | null;
-  deprecated?: boolean;
-  removed?: boolean;
-}
-
-/**
  * The result of parsing a SKILL.md file: frontmatter + raw body markdown.
+ *
+ * Note: bank-managed fields (provenance, embedding, usage_count, etc.) live
+ * in the IndexedSkill type from lib/bank.ts, NOT here. Per SPEC §2.5,
+ * provenance is computed at ingest, not declared by the author.
  */
 export interface ParsedSkill {
   frontmatter: SkillFrontmatter;
