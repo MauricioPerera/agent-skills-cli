@@ -175,6 +175,30 @@ const parseArgv = (argv: readonly string[]): Argv => {
   return { positional, flags };
 };
 
+/**
+ * Parse the rerank-mode selection from CLI flags. `--no-rerank` always wins
+ * over `--rerank-mode` (a more conservative posture for an opt-out flag).
+ * Used by both `query` and `bench`.
+ */
+const parseRerankMode = (
+  args: Argv,
+): "global" | "intent-conditional" | "none" => {
+  let mode: "global" | "intent-conditional" | "none" = "intent-conditional";
+  const flag = args.flags.get("rerank-mode");
+  if (typeof flag === "string") {
+    if (flag === "global" || flag === "intent-conditional" || flag === "none") {
+      mode = flag;
+    } else {
+      throw new CliError(
+        EXIT.USAGE,
+        `--rerank-mode must be one of: intent-conditional | global | none`,
+      );
+    }
+  }
+  if (args.flags.get("no-rerank") === true) mode = "none";
+  return mode;
+};
+
 const main = async (): Promise<void> => {
   const args = parseArgv(process.argv.slice(2));
   const cmd = args.positional[0];
@@ -392,18 +416,8 @@ const main = async (): Promise<void> => {
     }
     const kFlag = args.flags.get("k");
     const k = typeof kFlag === "string" ? Number(kFlag) : undefined;
-    const noRerank = args.flags.get("no-rerank") === true;
     const noFilter = args.flags.get("no-filter") === true;
-    const rerankModeFlag = args.flags.get("rerank-mode");
-    let rerankMode: "global" | "intent-conditional" | "none" = "intent-conditional";
-    if (typeof rerankModeFlag === "string") {
-      if (rerankModeFlag === "global" || rerankModeFlag === "intent-conditional" || rerankModeFlag === "none") {
-        rerankMode = rerankModeFlag;
-      } else {
-        throw new CliError(EXIT.USAGE, `--rerank-mode must be one of: intent-conditional | global | none`);
-      }
-    }
-    if (noRerank) rerankMode = "none";
+    const rerankMode = parseRerankMode(args);
     const embedder = resolveEmbedderFromEnv({ provider: providerOverride });
     const result = await runQuery({
       intent,
@@ -425,17 +439,7 @@ const main = async (): Promise<void> => {
     const kFlag = args.flags.get("k");
     const k = typeof kFlag === "string" ? Number(kFlag) : undefined;
     const noFilter = args.flags.get("no-filter") === true;
-    const noRerank = args.flags.get("no-rerank") === true;
-    const rerankModeFlag = args.flags.get("rerank-mode");
-    let rerankMode: "global" | "intent-conditional" | "none" = "intent-conditional";
-    if (typeof rerankModeFlag === "string") {
-      if (rerankModeFlag === "global" || rerankModeFlag === "intent-conditional" || rerankModeFlag === "none") {
-        rerankMode = rerankModeFlag;
-      } else {
-        throw new CliError(EXIT.USAGE, `--rerank-mode must be one of: intent-conditional | global | none`);
-      }
-    }
-    if (noRerank) rerankMode = "none";
+    const rerankMode = parseRerankMode(args);
     const embedder = resolveEmbedderFromEnv({ provider: providerOverride });
     const result = await runBench({
       truthFile,

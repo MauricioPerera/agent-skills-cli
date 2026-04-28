@@ -218,6 +218,12 @@ export const runPublish = async (opts: PublishOptions): Promise<PublishResult> =
 
   // 3. Parse + validate each skill.
   //
+  //   We collect descriptions during the validation loop into this sidecar
+  //   map so the composition pass below has cheap access to fall-back
+  //   summaries without a second filesystem read per new skill.
+  const descriptionsById = new Map<string, string>();
+
+  //
   //   Iteration order matters: we use it as the order skills appear in the
   //   resulting index. Strategy:
   //     a. First, walk the existing-index order — preserves any curated
@@ -298,6 +304,9 @@ export const runPublish = async (opts: PublishOptions): Promise<PublishResult> =
     // Cross-check: directory name should match `id` (a soft warning condition;
     // we don't fail on mismatch but we record the disk path).
     onDiskIds.add(fm.id);
+    if (typeof fm.description === "string") {
+      descriptionsById.set(fm.id, fm.description);
+    }
 
     // Compose the index entry for this skill.
     const repo = opts.repo
@@ -403,20 +412,12 @@ export const runPublish = async (opts: PublishOptions): Promise<PublishResult> =
       }),
     };
 
-    // Fill summary fallback for new skills: re-read description from disk.
-    for (let i = 0; i < composed.skills.length; i++) {
-      const s = composed.skills[i] as ComposedIndexSkill;
+    // Fill summary fallback for new skills from the in-memory map populated
+    // during validation. No disk re-reads.
+    for (const s of composed.skills) {
       if (s.summary === undefined) {
-        const r = validResults[i] as PublishSkillResult;
-        try {
-          const src = await readFile(r.path, "utf8");
-          const parsed = parseSkillSource(src);
-          if (parsed.frontmatter && typeof parsed.frontmatter.description === "string") {
-            s.summary = parsed.frontmatter.description;
-          }
-        } catch {
-          // best effort
-        }
+        const desc = descriptionsById.get(s.id);
+        if (desc !== undefined) s.summary = desc;
       }
     }
 
