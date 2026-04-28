@@ -1,0 +1,56 @@
+{
+  "name": "agent-skills-cli",
+  "version": "0.2.0-alpha.0",
+  "description": "Reference CLI for the agent-skills specification: validate SKILL.md files and resolve command_template against arg values.",
+  "license": "MIT",
+  "author": "Mauricio Perera",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MauricioPerera/agent-skills-cli.git"
+  },
+  "homepage": "https://github.com/MauricioPerera/agent-skills-cli#readme",
+  "bugs": {
+    "url": "https://github.com/MauricioPerera/agent-skills-cli/issues"
+  },
+  "keywords": [
+    "agent-skills",
+    "llm-tools",
+    "mcp-alternative",
+    "skill-bank",
+    "llms-txt"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agent-skills": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "schemas"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

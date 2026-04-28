@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MauricioPerera/agent-skills/blob/v0.1.1/schemas/skill.schema.json",
+  "title": "agent-skills SKILL.md frontmatter",
+  "description": "JSON Schema describing the YAML frontmatter of a SKILL.md file. Validate the parsed frontmatter (post-YAML-decode, as JSON) against this schema. Schema version: 0.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "title",
+    "description",
+    "use_when",
+    "command_template"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "0.1",
+      "description": "Spec schema version. v0.1.x of the spec produces files with schema_version 0.1."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "description": "Stable identifier within the publisher's namespace."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "description": "Semver MAJOR.MINOR.PATCH (with optional pre-release / build metadata)."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Human-readable name (≤ 80 UTF-8 bytes)."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "What the skill does (≤ 1000 UTF-8 bytes). Indexed for embedding."
+    },
+    "use_when": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "One-sentence when-to-pick (≤ 500 UTF-8 bytes). Primary signal for retrieval."
+    },
+    "command_template": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Shell command with {placeholder} substitutions. Placeholders MUST be in argument position, not inside literal quotes."
+    },
+
+    "license": {
+      "type": "string",
+      "description": "SPDX license identifier (e.g., 'MIT', 'Apache-2.0')."
+    },
+    "author": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "url":  { "type": "string", "format": "uri" },
+        "email":{ "type": "string", "format": "email" }
+      }
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri"
+    },
+    "category": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_:.-]{0,63}$"
+      },
+      "uniqueItems": true
+    },
+    "args": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/argSpec"
+      },
+      "description": "Map from placeholder name to its arg spec."
+    },
+    "examples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["intent", "command"],
+        "properties": {
+          "intent":          { "type": "string", "minLength": 1 },
+          "command":         { "type": "string", "minLength": 1 },
+          "expected_output": { "type": "string" }
+        }
+      }
+    },
+
+    "shell": {
+      "type": "string",
+      "enum": ["bash", "sh", "posix"],
+      "default": "bash"
+    },
+    "idempotent": {
+      "type": "boolean",
+      "default": false
+    },
+    "required_commands": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_-]*$" },
+      "uniqueItems": true
+    },
+    "required_env": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" },
+      "uniqueItems": true,
+      "description": "Env var names the skill REQUIRES to function. Values are never published. Used for presence-checking + sandbox env-access."
+    },
+    "optional_env": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" },
+      "uniqueItems": true,
+      "description": "Env var names the skill MAY read but does not require. Used by sandboxed banks to extend the read-access list without making them mandatory."
+    },
+    "network": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "URL prefix (HTTPS recommended). Trailing '*' permits any continuation. '*' in host position matches one DNS label."
+      },
+      "uniqueItems": true
+    },
+    "applicable_when": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "os": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "uniqueItems": true,
+          "description": "Lowercase OS identifiers. Common values: linux, macos, windows, freebsd. Open-ended; banks unable to recognize a value MUST treat the skill as potentially applicable."
+        },
+        "arch": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+          "uniqueItems": true,
+          "description": "Lowercase architecture identifiers. Common values: x86_64, arm64, i386, armv7. Open-ended."
+        },
+        "shell_commands_present": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_-]*$" },
+          "uniqueItems": true
+        },
+        "env_present": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" },
+          "uniqueItems": true
+        },
+        "env_absent": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "deprecates": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Identities of skills this version replaces."
+    },
+    "migration_notes": {
+      "type": "string",
+      "description": "Markdown prose explaining migration."
+    },
+    "related": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Identities of related skills."
+    },
+    "chains": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["skill"],
+        "properties": {
+          "skill":      { "type": "string", "description": "Full identity of the referenced skill." },
+          "args":       { "type": "object", "additionalProperties": true },
+          "output_var": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Vendor-specific data. Spec ignores; stored verbatim."
+    }
+  },
+
+  "$defs": {
+    "argSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "number", "boolean", "array", "object"]
+        },
+        "description": { "type": "string" },
+        "default":     {},
+        "sensitive":   { "type": "boolean", "default": false, "description": "If true, value is redacted in audit logs." },
+        "unquoted":    { "type": "boolean", "default": false, "description": "If true, value is inserted without single-quoting. REQUIRES strict pattern." },
+        "pattern":     { "type": "string", "description": "Regex (POSIX-extended) the value must match." },
+        "enum":        { "type": "array", "uniqueItems": true },
+        "range":       {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "number" },
+          "description": "[min, max] closed interval. Numeric types only."
+        },
+        "items":       { "$ref": "#/$defs/argSpec", "description": "For type=array, the schema of each element." },
+        "properties":  {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/argSpec" },
+          "description": "For type=object, per-field schemas (optional)."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "unquoted": { "const": true } }, "required": ["unquoted"] },
+          "then": {
+            "required": ["pattern"],
+            "description": "When unquoted is true, pattern is REQUIRED. Bank also enforces that pattern rejects shell metacharacters."
+          }
+        }
+      ]
+    }
+  }
+}
