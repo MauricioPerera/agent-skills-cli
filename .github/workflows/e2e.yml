@@ -96,10 +96,15 @@ jobs:
           OLLAMA_MODEL: all-minilm
         run: |
           BANK_TS=$(mktemp -d)
-          echo "BANK_TS=$BANK_TS" >> $GITHUB_ENV
           agent-skills sync github.com/MauricioPerera/agent-skills-pack@main --bank-dir "$BANK_TS"
-          agent-skills bench ../pack/bench-truth.jsonl --bank-dir "$BANK_TS" --json > /tmp/ts-result.json
-          cat /tmp/ts-result.json | jq '{top1, top3, topK, mean_top1_score, mean_margin, embedding_model}'
+          # `|| true` because `bench` exits non-zero on ANY failed query (its
+          # CI semantics for regression-detection inside a single repo). For the
+          # cross-impl parity check, we want the JSON output regardless of
+          # absolute accuracy — what we're validating is that BOTH implementations
+          # produce the SAME failures, not that there are zero failures.
+          agent-skills bench ../pack/bench-truth.jsonl --bank-dir "$BANK_TS" --json > /tmp/ts-result.json || true
+          test -s /tmp/ts-result.json || { echo "::error::TS bench produced no output"; exit 1; }
+          jq '{top1, top3, topK, mean_top1_score, mean_margin, embedding_model}' /tmp/ts-result.json
 
       - name: Run Python bench
         working-directory: pyproof
@@ -108,8 +113,11 @@ jobs:
         run: |
           BANK_PY=$(mktemp -d)
           python bank.py --bank-dir "$BANK_PY" sync github.com/MauricioPerera/agent-skills-pack@main
-          python bank.py --bank-dir "$BANK_PY" --json bench ../pack/bench-truth.jsonl > /tmp/py-result.json
-          cat /tmp/py-result.json | jq '{top1, top3, topK, mean_top1_score, mean_margin, embedding_model}'
+          # Same || true — bench exits non-zero on failures; we want the JSON
+          # output to compare against TS's, regardless.
+          python bank.py --bank-dir "$BANK_PY" --json bench ../pack/bench-truth.jsonl > /tmp/py-result.json || true
+          test -s /tmp/py-result.json || { echo "::error::Python bench produced no output"; exit 1; }
+          jq '{top1, top3, topK, mean_top1_score, mean_margin, embedding_model}' /tmp/py-result.json
 
       - name: Compare retrieval outcomes (PARITY CHECK)
         run: |
