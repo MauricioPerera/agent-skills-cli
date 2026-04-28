@@ -32,7 +32,17 @@ const isMissing = (err: unknown): boolean => {
 
 export interface Subscription {
   id: string;
-  source_type: "git" | "url";
+  /**
+   * Source type. Currently only `"git"` is supported (v0.13.3+).
+   *
+   * The `"url"` variant was aspirational since v0.1 — it was for
+   * server-hosted skills (SPEC §3.3) consumed via a single HTTPS URL
+   * with no commit-hash provenance. No code path ever produced or
+   * consumed it; the type is now narrowed to reflect implementation
+   * reality. If/when server-hosted ingestion lands (spec v0.4 design
+   * decision), the type will be re-widened with deliberate behaviour.
+   */
+  source_type: "git";
   repo?: string;
   ref_requested?: string;
   ref_resolved?: string;
@@ -45,7 +55,8 @@ export interface Subscription {
 }
 
 export interface SkillProvenance {
-  source_type: "git" | "url";
+  /** See Subscription.source_type — same narrowing in v0.13.3+. */
+  source_type: "git";
   source: string;
   ref_resolved_to?: string;
   ref_requested?: string;

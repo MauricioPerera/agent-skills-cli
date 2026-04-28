@@ -69,6 +69,13 @@ export interface UpdateSubscriptionResult {
   unchanged: number;
   /** Number of orphan files (old-SHA) actually deleted. 0 in dry-run. */
   gc_removed: number;
+  /**
+   * Number of skills the GC pass DECLINED to delete because their SHA is
+   * pinned by another active subscription on the same repo (v0.13.3+).
+   * Surfaced so operators of multi-subscription setups can see when the
+   * protect-set kicked in. 0 in single-subscription deployments.
+   */
+  gc_protected: number;
   /** Underlying sync result; omitted for unchanged or dry-run. */
   sync?: SyncResult;
   /** If something failed (resolve error, sync error), the message. */
@@ -118,6 +125,7 @@ const updateOne = async (
       updated: [],
       unchanged: 0,
       gc_removed: 0,
+      gc_protected: 0,
       error: `subscription has no repo recorded; can't update`,
     };
   }
@@ -162,6 +170,7 @@ const updateOne = async (
       updated: [],
       unchanged: beforeForSource.length,
       gc_removed: 0,
+      gc_protected: 0,
       error: `cannot resolve ref: ${msg}`,
     };
   }
@@ -179,6 +188,7 @@ const updateOne = async (
       updated: [],
       unchanged: beforeForSource.length,
       gc_removed: 0,
+      gc_protected: 0,
     };
   }
 
@@ -198,6 +208,7 @@ const updateOne = async (
       updated: [],
       unchanged: beforeForSource.length,
       gc_removed: 0,
+      gc_protected: 0,
     };
   }
 
@@ -226,6 +237,7 @@ const updateOne = async (
       updated: [],
       unchanged: beforeForSource.length,
       gc_removed: 0,
+      gc_protected: 0,
       error: `sync failed: ${msg}`,
     };
   }
@@ -281,12 +293,16 @@ const updateOne = async (
     }
   }
   let gcCount = 0;
+  let gcProtected = 0;
   for (const skill of allAfter) {
     if (!skill.identity.startsWith(`${repo}@`)) continue;
     if (skill.identity.startsWith(`${repo}@${refNew}/`)) continue;
     // Don't drop this skill if another subscription pins the SHA.
     const skillSha = skill.provenance.ref_resolved_to;
-    if (skillSha && protectedShas.has(skillSha)) continue;
+    if (skillSha && protectedShas.has(skillSha)) {
+      gcProtected += 1;
+      continue;
+    }
     const ok = await bank.removeSkill(skill.identity);
     if (ok) gcCount += 1;
   }
@@ -302,6 +318,7 @@ const updateOne = async (
     updated,
     unchanged: unchangedCount,
     gc_removed: gcCount,
+    gc_protected: gcProtected,
     sync: syncResult,
   };
 };
@@ -386,6 +403,11 @@ export const printUpdateResult = (result: UpdateResult, asJson: boolean): void =
     for (const id of sub.removed) process.stdout.write(`      - ${id}\n`);
     if (sub.gc_removed > 0) {
       process.stdout.write(`      gc: removed ${sub.gc_removed} orphaned file(s)\n`);
+    }
+    if (sub.gc_protected > 0) {
+      process.stdout.write(
+        `      gc: protected ${sub.gc_protected} skill(s) pinned by another active subscription\n`,
+      );
     }
   }
 

@@ -419,6 +419,11 @@ describe("runUpdate — multi-subscription GC isolation (v0.13.0+, fixes #6)", (
     expect(ids[0]).toContain("frozen");
     expect(ids[1]).toContain(SHA_MAIN_NEW);      // main updated
     expect(ids[1]).toContain("rolling");
+
+    // v0.13.3+ — gc_protected counter surfaces when the protect-set kicked in.
+    const updatedSub = result.subscriptions[0]!;
+    expect(updatedSub.gc_protected).toBe(1);   // the v1.0.0 frozen skill
+    expect(updatedSub.gc_removed).toBe(1);     // SHA_MAIN_OLD orphan
   });
 
   it("orphan SHA from a previous main-update IS still GC'd (only protect ACTIVE subs)", async () => {

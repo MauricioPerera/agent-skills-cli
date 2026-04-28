@@ -639,7 +639,8 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.12.0 | shipped | + per-tenant audit scoping (`--tenant <id>` on exec/query/bench); intent-conditional rerank filters by tenant; SPEC §4.5.1 |
 | v0.13.0 | shipped | Cleanup + correctness: listSkills caching (perf), remove deprecated `rerank_applied` field, fix update.ts GC for multi-subscription edge case |
 | v0.13.1 | shipped | + listAudit caching (closes the last perf debt from the post-v0.11 code review). 363/363 tests; 8/10 review issues fixed |
-| **v0.13.2** | **shipped** | Docs alignment patch: stale install/version refs across READMEs, init scaffolded CI workflow now pins v0.13.1, BENCHMARK.md updated. Plus a hotfix for a CI type-check break introduced in v0.13.1 |
+| v0.13.2 | shipped | Docs alignment patch: stale install/version refs across READMEs, init scaffolded CI workflow now pins v0.13.1, BENCHMARK.md updated. Plus a hotfix for a CI type-check break introduced in v0.13.1 |
+| **v0.13.3** | **shipped** | + `gc_protected` counter in update results (visibility into multi-sub GC); narrowed `Subscription.source_type` from `"git" \| "url"` to `"git"` (URL-only sub was always aspirational, never implemented). 10/10 review issues fixed |
 | v0.14.0 | planned | Sigstore + Rekor (Level 4) — keyless signing with public transparency log |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
