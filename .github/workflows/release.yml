@@ -1,0 +1,151 @@
+name: release
+
+# Tag-triggered npm publish via OIDC trusted publisher (no long-lived tokens).
+#
+# Trigger: push of any annotated tag matching v*.*.*  (e.g. v0.18.2, v1.0.0,
+# also v0.19.0-rc.1 — release-candidate tags get published with --tag rc).
+#
+# Auth flow: GitHub Actions issues an OIDC JWT identifying this workflow run.
+# npm exchanges that JWT for a publish-scoped token *if* npm has
+# `@rckflr/agent-skills-cli` configured with this repo + workflow as a
+# Trusted Publisher (one-time setup at
+# https://www.npmjs.com/settings/rckflr/packages → settings → trusted publisher).
+#
+# Side effect: `--provenance` attaches a Sigstore attestation to the tarball.
+# The npm package page gets a "Provenance" badge linking back to the exact
+# commit SHA and workflow run that produced it. This is the trust path that
+# verifies "this tarball came from this exact source", which in turn makes
+# the project's own provenance story credible (the CLI that talks about
+# Sigstore is itself Sigstore-signed).
+#
+# Pre-publish guards:
+#   1. The tag MUST be on main (refuse hotfixes from feature branches).
+#   2. package.json's version MUST exactly match the tag (no v0.18.2 tag
+#      pointing at a 0.18.1 package.json — caught explicitly, would otherwise
+#      publish the wrong version silently).
+#   3. The prepublishOnly hook re-runs typecheck + test + build inside the
+#      sandboxed runner.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-*"   # rc / beta / alpha tags — published with dist-tag below
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # The OIDC permission is what unlocks the trusted-publisher exchange.
+    # `contents: read` for checkout is the default; explicit for clarity.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      - name: Confirm tag is on main
+        # Refuse to publish from a tag that's not reachable from main.
+        # Catches "I tagged a feature branch by accident" before it ships.
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth 50
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} commit ${GITHUB_SHA} is not on origin/main."
+            echo "Refusing to publish — release tags MUST come from main."
+            exit 1
+          fi
+          echo "✓ Tag ${GITHUB_REF_NAME} commit is on main."
+
+      - name: Confirm package.json version matches tag
+        # GITHUB_REF_NAME for tag pushes is "v0.18.2" → strip the leading "v".
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag version ($tag) does not match package.json version ($pkg)."
+            echo "Bump package.json before tagging, or retag after bumping."
+            exit 1
+          fi
+          echo "✓ Tag and package.json agree on version $tag."
+
+      - name: Install
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Determine dist-tag
+        id: tag
+        # Stable tags (v0.18.2) → "latest". Pre-release tags (v0.19.0-rc.1) →
+        # the suffix between - and . (so "rc", "beta", "alpha"). This avoids
+        # an rc.1 accidentally becoming `npm install @rckflr/agent-skills-cli`'s
+        # default install target.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [[ "$tag" == *-* ]]; then
+            suffix="${tag#*-}"
+            channel="${suffix%%.*}"
+            echo "channel=$channel" >> "$GITHUB_OUTPUT"
+            echo "Using dist-tag: $channel"
+          else
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+            echo "Using dist-tag: latest"
+          fi
+
+      - name: Publish to npm with provenance
+        # --provenance: emits a Sigstore attestation linking this tarball to
+        # this exact workflow run + commit SHA. Visible on the npm package page
+        # as a "Provenance" badge.
+        # --access public: required for scoped packages on free npm accounts.
+        # NPM_CONFIG_PROVENANCE: belt-and-suspenders for older npm CLIs.
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+        run: npm publish --provenance --access public --tag "${{ steps.tag.outputs.channel }}"
+
+      - name: Verify the package landed on the registry
+        # 30-second sanity check; npm propagation is usually a few seconds.
+        # Fails the workflow loud if for any reason the publish didn't actually
+        # land (avoids "publish step said success but the registry didn't see it").
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 10); do
+            if npm view "@rckflr/agent-skills-cli@$tag" version > /dev/null 2>&1; then
+              echo "✓ @rckflr/agent-skills-cli@$tag is live on npm registry."
+              exit 0
+            fi
+            echo "Waiting for registry propagation... attempt $i/10"
+            sleep 3
+          done
+          echo "::error::Package was published but didn't appear in registry within 30s."
+          exit 1
+
+      - name: Summary
+        if: success()
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          channel="${{ steps.tag.outputs.channel }}"
+          {
+            echo "## Published @rckflr/agent-skills-cli@$tag"
+            echo ""
+            echo "- **dist-tag:** $channel"
+            echo "- **commit:** $GITHUB_SHA"
+            echo "- **install:** \`npm install -g @rckflr/agent-skills-cli@$tag\`"
+            echo "- **page:** https://www.npmjs.com/package/@rckflr/agent-skills-cli/v/$tag"
+            echo "- **provenance:** ✓ Sigstore-attested via GitHub Actions OIDC"
+          } >> "$GITHUB_STEP_SUMMARY"
