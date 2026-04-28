@@ -284,8 +284,8 @@ describe("runQuery — happy path", () => {
 
 // v0.10.0: signature verification integration.
 describe("runSync — signature verification (v0.10.0+)", () => {
-  const buildFetchWithSignedTag = (verified: boolean, reason: string) => {
-    return (async (url) => {
+  const buildFetchWithSignedTag = (verified: boolean, reason: string): typeof fetch => {
+    const fn: typeof fetch = async (url) => {
       const u = url.toString();
       // GitHub: ref → tag-object SHA
       if (u.includes("/git/refs/tags/")) {
@@ -335,7 +335,8 @@ describe("runSync — signature verification (v0.10.0+)", () => {
         return new Response(VALID_SKILL_MD("alpha", "alpha thing"), { status: 200 });
       }
       return new Response("not found", { status: 404 });
-    }) as unknown as typeof fetch;
+    };
+    return fn;
   };
 
   it("records signature.status='valid' in the SyncResult when GitHub verifies the tag", async () => {

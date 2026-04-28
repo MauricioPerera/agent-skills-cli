@@ -115,7 +115,7 @@ const parseSourceSpec = (
  *
  * Returns the SHA. Throws CliError on resolution failure.
  */
-const resolveRef = async (
+export const resolveRef = async (
   repo: string,
   ref: string,
   fetchImpl: typeof fetch,

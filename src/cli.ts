@@ -11,8 +11,9 @@ import { printExecResult, runExec } from "./commands/exec.js";
 import { printBenchResult, runBench } from "./commands/bench.js";
 import { printPublishResult, runPublish } from "./commands/publish.js";
 import { printInitResult, runInit } from "./commands/init.js";
+import { printUpdateResult, runUpdate } from "./commands/update.js";
 
-const VERSION = "0.10.0";
+const VERSION = "0.11.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -27,6 +28,8 @@ Commands (local, no network):
 Commands (need an embedding provider — see ENV section below):
   sync <repo>[@<ref>]              Fetch + embed + index skills from a git source.
                                    Default ref: main.
+  update [<source>] [--dry-run]    Re-resolve subscribed packs, re-sync if the
+                                   ref moved, GC orphan SHAs. Omit <source> for all.
   query "<intent>" [--k N]         Find the top-K skills matching an intent.
   bench <truth-file> [--k N]       Measure retrieval accuracy against a ground-truth
                                    file of (intent, expected_id) pairs.
@@ -366,6 +369,20 @@ const main = async (): Promise<void> => {
       }
     }
     process.exit(result.errored > 0 ? EXIT.RUNTIME : EXIT.OK);
+  }
+
+  if (cmd === "update") {
+    const source = args.positional[1]; // optional
+    const dryRun = args.flags.get("dry-run") === true;
+    const embedder = resolveEmbedderFromEnv({ provider: providerOverride });
+    const result = await runUpdate({
+      bank,
+      embedder,
+      source,
+      dryRun,
+    });
+    printUpdateResult(result, asJson);
+    process.exit(result.failed > 0 ? EXIT.RUNTIME : EXIT.OK);
   }
 
   if (cmd === "query") {

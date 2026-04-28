@@ -13,6 +13,29 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
+**v0.11.0** — `update` command. Closes the obvious UX gap left by `sync`: how do you refresh installed packs?
+
+```bash
+$ agent-skills update                    # check every subscription
+Update 2 subscription(s)
+
+  ↑ github.com/me/pack-a@main
+      a1b2c3d4e5f6 → fedcba098765
+      + new-skill
+      ↑ http-get: 1.0.0 → 1.1.0
+      - obsolete-skill
+      gc: removed 7 orphaned file(s)
+
+  · github.com/me/pack-b@v2.0.0
+      9876abcd1234 (no change)
+
+summary: 1 changed, 1 unchanged
+```
+
+`update` re-resolves each subscribed ref against the host's API, re-syncs only when the SHA actually moved, **garbage-collects the orphan files** that older `sync` calls left behind on each pack, and reports a per-skill diff (added / removed / version-bumped). It inherits the subscription's `verify_signature` setting, so a moving tag that becomes unsigned aborts the update before any ingestion happens.
+
+`--dry-run` resolves new SHAs and reports what would change without writing anything.
+
 **v0.10.0** — signed-tag verification at sync time. Closes the SECURITY.md threat model item that's been documented since v0.1: an attacker who compromises an upstream account or the host's tag-resolution path can't move a `v1.0.0` tag to point at malicious code without also forging a GPG-verified signature on the tag.
 
 Two-tier enforcement:
@@ -325,6 +348,44 @@ The CLI's exit code matches the executed command's exit code (the agent can disp
 
 **Sensitive args are redacted in the audit log.** A skill author marks an arg with `sensitive: true` in its `args` schema; the CLI substitutes `"<redacted>"` in the audit JSONL even though the value still flows to the bash subprocess at exec time.
 
+### `agent-skills update [<source>] [--dry-run]` *(v0.11.0+)*
+
+Refresh subscribed packs from upstream. Re-resolves each subscribed ref against the host's API; re-syncs only the ones whose SHA has actually moved; garbage-collects the orphan files that older syncs left behind; reports a per-skill diff.
+
+```bash
+# Refresh all subscriptions
+$ agent-skills update
+Update 2 subscription(s)
+
+  ↑ github.com/me/pack-a@main
+      a1b2c3d4e5f6 → fedcba098765
+      + new-skill
+      ↑ http-get: 1.0.0 → 1.1.0
+      - obsolete-skill
+      gc: removed 7 orphaned file(s)
+
+  · github.com/me/pack-b@v2.0.0
+      9876abcd1234 (no change)
+
+summary: 1 changed, 1 unchanged
+
+# Refresh a specific subscription
+$ agent-skills update github.com/me/pack-a@main
+
+# Preview what would change without writing
+$ agent-skills update --dry-run
+```
+
+**Behaviour**:
+
+- **Idempotent on a stable ref**. Re-running on a `@v1.0.0` pinned tag is a no-op — no embedding API calls, no disk writes, no subscription updates.
+- **GC built in**. `sync <repo>@<new-ref>` accumulates orphan files at every SHA it ever resolved. `update` removes everything from this source whose SHA isn't the current one. (Sync alone doesn't — that's by design; sync is for first-install, update is for refresh.)
+- **Inherits signature enforcement** from the subscription. If the original sync used `--verify-signature`, that flag is persisted (`verify_signature: true` in the subscription record) and `update` reuses it — so a moving tag that becomes unsigned aborts the update before any ingestion.
+- **--dry-run** resolves new SHAs and reports what would change without writing anything.
+- **JSON output** (`--json`) emits the full `UpdateResult` struct — every per-subscription delta with `added`/`removed`/`updated` arrays for CI integration.
+
+Exit code: `0` on success (even on no-op), `1` if any subscription's update failed (e.g., resolve error, signature enforcement abort).
+
 ### `agent-skills audit [--limit N] [--skill <id>]`
 
 Inspect the local audit log (append-only JSONL at `<bank>/audit.jsonl`).
@@ -554,8 +615,9 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.7.0 | shipped | + `bench` subcommand: reproducible top-K accuracy against a JSONL/JSON-array truth file. CI integration via JSON output + non-zero exit on any failure |
 | v0.8.0 | shipped | + `publish` command: validate skills/, generate skills-index.json (preserves hand-crafted summaries + curated ordering), optionally git-tag |
 | v0.9.0 | shipped | + `init` command: scaffold a single skill or full pack from embedded templates. Output validates against the spec on first run |
-| **v0.10.0** | **shipped** | + signed-tag verification at sync time (always observe, optionally enforce via `--verify-signature`). Closes the SECURITY.md tag-tampering threat model. 289/289 tests |
-| v0.11.0 | planned | Per-tenant audit scoping (`--user <id>`) + spec v0.2 (formalize bench format, intent in audit, intent-conditional rerank pattern) |
+| v0.10.0 | shipped | + signed-tag verification at sync time. Closes the SECURITY.md tag-tampering threat model |
+| **v0.11.0** | **shipped** | + `update` command: re-resolve subscribed refs, re-sync only on movement, GC orphan files from old SHAs, per-skill diff. 297/297 tests |
+| v0.12.0 | planned | Per-tenant audit scoping (`--user <id>`) + spec v0.2 (formalize bench format, intent in audit, intent-conditional rerank pattern) |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
 ## Sister projects

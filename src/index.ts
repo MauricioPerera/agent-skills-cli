@@ -137,3 +137,11 @@ export type { InitOptions, InitResult } from "./commands/init.js";
 // Signature verification (v0.10.0+, used internally by sync)
 export { verifyGitHubTag, enforceVerification } from "./lib/signature.js";
 export type { SignatureStatus, SignatureVerification } from "./lib/signature.js";
+
+// Update command (v0.11.0+)
+export { runUpdate, printUpdateResult } from "./commands/update.js";
+export type {
+  UpdateOptions,
+  UpdateResult,
+  UpdateSubscriptionResult,
+} from "./commands/update.js";
