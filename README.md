@@ -15,7 +15,13 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 **v0.2.0** — first production reference. Implements local commands (`validate`, `resolve`) and network commands (`sync`, `query`, `list`, `reset`) backed by **Cloudflare Workers AI** for embeddings. End-to-end loop: subscribe to a skill pack on GitHub → embed every skill → query by intent → get back a resolved bash command.
 
-> **Empirical validation**: 7 / 7 agent intents matched their intended skill as top-1 against the [agent-skills-pack v1.0.0](https://github.com/MauricioPerera/agent-skills-pack) corpus (`bge-base-en-v1.5`, 768-dim). See [BENCHMARK.md](./BENCHMARK.md) for the full table.
+> **Empirical validation** (35 paraphrases × 3 embedding models = 105 query evaluations against the public skill pack):
+> - **Top-1 accuracy**: 97-100% depending on model.
+> - **Top-3 accuracy**: 100% across all 3 models tested.
+> - Best for English: `bge-large-en-v1.5` (35/35 top-1).
+> - Best free-tier: `bge-base-en-v1.5` (34/35 top-1, 35/35 top-3).
+>
+> Full methodology + tables + failure analysis: [BENCHMARK.md](./BENCHMARK.md).
 
 ## Install
 
