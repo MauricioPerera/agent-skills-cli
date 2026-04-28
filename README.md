@@ -13,6 +13,10 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
+**v0.11.0+ + spec v0.2** — the spec is now specified, not just documented: a [510-line Python proof-of-concept](https://github.com/MauricioPerera/agent-skills-py-proof) reproduces this CLI's retrieval behaviour bit-for-bit (34/35 top-1, 35/35 top-3, mean margin +0.175 — identical to 4 decimals on the canonical benchmark). If you're writing a third implementation, that file is the shortest path to the spec.
+
+---
+
 **v0.11.0** — `update` command. Closes the obvious UX gap left by `sync`: how do you refresh installed packs?
 
 ```bash
