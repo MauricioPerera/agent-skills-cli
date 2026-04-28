@@ -89,14 +89,18 @@ jobs:
         working-directory: pyproof
         run: pip install pyyaml requests
 
-      - name: Run TS bench
+      - name: Run TS sync + bench (capture both as JSON)
         working-directory: cli
         env:
           EMBEDDING_PROVIDER: ollama
           OLLAMA_MODEL: all-minilm
         run: |
           BANK_TS=$(mktemp -d)
-          agent-skills sync github.com/MauricioPerera/agent-skills-pack@main --bank-dir "$BANK_TS"
+          # Sync output captures the full SyncResult including the
+          # signature{status,reason,signed_by?} block — needed for the
+          # cross-impl signature-parity check below.
+          agent-skills sync github.com/MauricioPerera/agent-skills-pack@main --bank-dir "$BANK_TS" --json > /tmp/ts-sync.json
+          jq '{ref_resolved, signature, total: .total, synced: .synced}' /tmp/ts-sync.json
           # `|| true` because `bench` exits non-zero on ANY failed query (its
           # CI semantics for regression-detection inside a single repo). For the
           # cross-impl parity check, we want the JSON output regardless of
@@ -106,15 +110,15 @@ jobs:
           test -s /tmp/ts-result.json || { echo "::error::TS bench produced no output"; exit 1; }
           jq '{top1, top3, topK, mean_top1_score, mean_margin, embedding_model}' /tmp/ts-result.json
 
-      - name: Run Python bench
+      - name: Run Python sync + bench (capture both as JSON)
         working-directory: pyproof
         env:
           OLLAMA_MODEL: all-minilm
         run: |
           BANK_PY=$(mktemp -d)
-          python bank.py --bank-dir "$BANK_PY" sync github.com/MauricioPerera/agent-skills-pack@main
-          # Same || true — bench exits non-zero on failures; we want the JSON
-          # output to compare against TS's, regardless.
+          python bank.py --bank-dir "$BANK_PY" --json sync github.com/MauricioPerera/agent-skills-pack@main > /tmp/py-sync.json
+          jq '{ref_resolved, signature, total: .total, synced: .synced}' /tmp/py-sync.json
+          # Same || true as the TS step — bench exits non-zero on failures.
           python bank.py --bank-dir "$BANK_PY" --json bench ../pack/bench-truth.jsonl > /tmp/py-result.json || true
           test -s /tmp/py-result.json || { echo "::error::Python bench produced no output"; exit 1; }
           jq '{top1, top3, topK, mean_top1_score, mean_margin, embedding_model}' /tmp/py-result.json
@@ -162,13 +166,51 @@ jobs:
           fi
           echo "✓ TS and Python implementations produce identical retrieval results to 4 decimal places."
 
-      - name: Upload bench results as artifact
+      - name: Compare signature verification outcomes (SPEC §5.1 PARITY CHECK)
+        run: |
+          # Signature observation must agree across implementations: same
+          # GitHub API result + same status enum mapping + same reason text.
+          # If they ever diverge, the spec's signature_status enumeration
+          # has become ambiguous (or one impl drifted from it).
+          ts_sig_status=$(jq -r '.signature.status'  /tmp/ts-sync.json)
+          ts_sig_reason=$(jq -r '.signature.reason'  /tmp/ts-sync.json)
+          py_sig_status=$(jq -r '.signature.status'  /tmp/py-sync.json)
+          py_sig_reason=$(jq -r '.signature.reason'  /tmp/py-sync.json)
+
+          echo ""
+          echo "=== Signature parity (SPEC §5.1) ==="
+          echo "                TS                                          PY"
+          echo "status          $ts_sig_status                                  $py_sig_status"
+          echo "reason          \"$ts_sig_reason\"     \"$py_sig_reason\""
+          echo ""
+
+          fail=0
+          if [ "$ts_sig_status" != "$py_sig_status" ]; then
+            echo "::error::signature.status mismatch: TS='$ts_sig_status' PY='$py_sig_status'. The two implementations disagree on the SPEC §5.1 status enumeration mapping."
+            fail=1
+          fi
+          if [ "$ts_sig_reason" != "$py_sig_reason" ]; then
+            echo "::error::signature.reason mismatch: TS='$ts_sig_reason' PY='$py_sig_reason'. The reason text is part of the operator-facing signal; keep them aligned."
+            fail=1
+          fi
+          if [ $fail -ne 0 ]; then exit 1; fi
+
+          # Confirm both impls reported a status from the legal enumeration.
+          case "$ts_sig_status" in
+            valid|invalid|unsigned|unverified) ;;
+            *) echo "::error::TS reported illegal signature.status: '$ts_sig_status'"; exit 1 ;;
+          esac
+          echo "✓ Both implementations agree on signature.status='$ts_sig_status' with identical reason."
+
+      - name: Upload sync + bench results as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bench-results
+          name: parity-results
           path: |
+            /tmp/ts-sync.json
             /tmp/ts-result.json
+            /tmp/py-sync.json
             /tmp/py-result.json
           retention-days: 30
 
