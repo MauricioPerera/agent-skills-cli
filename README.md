@@ -145,6 +145,7 @@ Full type definitions are exported. See `src/types.ts`.
 ## Sister projects
 
 - [`agent-skills`](https://github.com/MauricioPerera/agent-skills) — the **canonical specification**. This CLI implements its v0.1 schema.
+- [`agent-skills-pack`](https://github.com/MauricioPerera/agent-skills-pack) — **example skill pack** with 7 production-ready skills. Used as the integration test corpus for this CLI.
 - [`just-bash-data`](https://github.com/MauricioPerera/just-bash-data) — the **storage runtime** the future `sync`/`query`/`exec` commands will use. Provides `db` (document store) + `vec` (vector search) primitives.
 
 ## License
