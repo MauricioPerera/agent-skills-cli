@@ -358,6 +358,102 @@ describe("runUpdate — selective targeting", () => {
   });
 });
 
+describe("runUpdate — multi-subscription GC isolation (v0.13.0+, fixes #6)", () => {
+  // The pre-v0.13 GC matched orphans by `repo@` prefix alone — meaning
+  // updating `pack@main` would also drop skills from a separate
+  // `pack@v1.0.0` subscription pointing at the same repo. v0.13.0 fixes
+  // this by collecting the protected SHAs from every other active
+  // subscription and refusing to GC them.
+
+  const SHA_V1 = "1111111111111111111111111111111111111111";
+  const SHA_MAIN_OLD = "2222222222222222222222222222222222222222";
+  const SHA_MAIN_NEW = "3333333333333333333333333333333333333333";
+
+  it("updating one subscription does NOT GC skills owned by another sub of the same repo", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const embedder = createStubEmbedder(32);
+
+    // Initial: subscribe to BOTH `pack@v1.0.0` and `pack@main`.
+    // v1.0.0 pinned to SHA_V1 with one skill; main pinned to SHA_MAIN_OLD
+    // with another skill.
+    await runSync({
+      source: "github.com/me/pack@v1.0.0",
+      bank,
+      embedder,
+      fetchFn: buildFetch(
+        { "v1.0.0": SHA_V1 },
+        { [SHA_V1]: [{ id: "frozen", version: "1.0.0" }] },
+      ),
+    });
+    await runSync({
+      source: "github.com/me/pack@main",
+      bank,
+      embedder,
+      fetchFn: buildFetch(
+        { main: SHA_MAIN_OLD },
+        { [SHA_MAIN_OLD]: [{ id: "rolling", version: "1.0.0" }] },
+      ),
+    });
+    expect((await bank.listSkills()).length).toBe(2);
+
+    // Now update `pack@main` — main moved to SHA_MAIN_NEW with a v2 skill.
+    // The v1.0.0 subscription's pinned SHA (SHA_V1) is unrelated and
+    // MUST survive the update's GC pass.
+    const result = await runUpdate({
+      bank,
+      embedder,
+      source: "github.com/me/pack@main",
+      fetchFn: buildFetch(
+        { main: SHA_MAIN_NEW },
+        { [SHA_MAIN_NEW]: [{ id: "rolling", version: "2.0.0" }] },
+      ),
+    });
+
+    expect(result.changed).toBe(1);
+    const all = await bank.listSkills();
+    expect(all.length).toBe(2);
+
+    // Both skills present: the frozen v1.0.0 one + the new main one.
+    const ids = all.map((s) => s.identity).sort();
+    expect(ids[0]).toContain(SHA_V1);            // frozen survived
+    expect(ids[0]).toContain("frozen");
+    expect(ids[1]).toContain(SHA_MAIN_NEW);      // main updated
+    expect(ids[1]).toContain("rolling");
+  });
+
+  it("orphan SHA from a previous main-update IS still GC'd (only protect ACTIVE subs)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const embedder = createStubEmbedder(32);
+
+    // Single subscription. SHA_MAIN_OLD becomes an orphan after update.
+    // The protected-SHA logic must NOT confuse "previously-pinned by this
+    // very subscription" with "pinned by another subscription".
+    await runSync({
+      source: "github.com/me/pack@main",
+      bank,
+      embedder,
+      fetchFn: buildFetch(
+        { main: SHA_MAIN_OLD },
+        { [SHA_MAIN_OLD]: [{ id: "alpha", version: "1.0.0" }] },
+      ),
+    });
+
+    const result = await runUpdate({
+      bank,
+      embedder,
+      fetchFn: buildFetch(
+        { main: SHA_MAIN_NEW },
+        { [SHA_MAIN_NEW]: [{ id: "alpha", version: "2.0.0" }] },
+      ),
+    });
+
+    expect(result.subscriptions[0]?.gc_removed).toBe(1); // old SHA cleaned
+    const all = await bank.listSkills();
+    expect(all.length).toBe(1);
+    expect(all[0]?.identity).toContain(SHA_MAIN_NEW);
+  });
+});
+
 describe("runUpdate — error paths", () => {
   it("records error in per-subscription result when ref re-resolution fails", async () => {
     const bank = new FileBank({ rootDir: tmpDir });

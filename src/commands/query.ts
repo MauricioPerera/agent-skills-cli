@@ -105,8 +105,6 @@ export interface QueryResult {
   hits: QueryHit[];
   /** Skills that scored well but were filtered out by applicable_when. */
   filtered_out?: FilteredOut[];
-  /** Backward-compat (deprecated v0.5.0): true iff rerank_mode != "none". */
-  rerank_applied: boolean;
 }
 
 export const runQuery = async (opts: QueryOptions): Promise<QueryResult> => {
@@ -223,7 +221,6 @@ export const runQuery = async (opts: QueryOptions): Promise<QueryResult> => {
     intent: opts.intent,
     embedding_model: meta.embedding_model,
     rerank_mode: mode,
-    rerank_applied: mode !== "none",
     filter_applied: filterEnabled,
     hits: top.map((h) => {
       const hit: QueryHit = {

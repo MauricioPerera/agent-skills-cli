@@ -153,6 +153,77 @@ describe("FileBank — skills", () => {
   });
 });
 
+describe("FileBank — listSkills caching (v0.13.0+)", () => {
+  // The cache is per-instance and invalidated by every mutator. These tests
+  // pin the contract: callers see the same result on repeat reads, and any
+  // change (upsert / remove / reset) makes the next read pick up the change.
+  // Direct reference equality on the returned array is the cheapest proof
+  // the cache is being hit.
+
+  it("returns the same array reference on repeated reads (cache hit)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.upsertSkill(buildSkill({ identity: "id-1" }));
+    const first = await bank.listSkills();
+    const second = await bank.listSkills();
+    expect(second).toBe(first); // strict reference equality = cache hit
+    expect(second).toHaveLength(1);
+  });
+
+  it("upsertSkill invalidates the cache (next read sees the new skill)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.upsertSkill(buildSkill({ identity: "id-1" }));
+    const before = await bank.listSkills();
+    expect(before).toHaveLength(1);
+
+    await bank.upsertSkill(buildSkill({ identity: "id-2" }));
+    const after = await bank.listSkills();
+    expect(after).toHaveLength(2);
+    expect(after).not.toBe(before); // new array reference = cache rebuilt
+  });
+
+  it("removeSkill invalidates the cache (next read sees the removal)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.upsertSkill(buildSkill({ identity: "id-1" }));
+    await bank.upsertSkill(buildSkill({ identity: "id-2" }));
+    const before = await bank.listSkills();
+    expect(before).toHaveLength(2);
+
+    await bank.removeSkill("id-1");
+    const after = await bank.listSkills();
+    expect(after).toHaveLength(1);
+    expect(after).not.toBe(before);
+  });
+
+  it("caches the empty result for an unsynced bank (no repeated readdir)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const first = await bank.listSkills();
+    const second = await bank.listSkills();
+    expect(first).toEqual([]);
+    expect(second).toBe(first); // empty cache hit; no repeated ENOENT scans
+  });
+
+  it("reset() invalidates the cache", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.upsertSkill(buildSkill({ identity: "id-1" }));
+    await bank.listSkills(); // prime cache
+    await bank.reset();
+    const after = await bank.listSkills();
+    expect(after).toEqual([]); // empty after reset, not stale cached entries
+  });
+
+  it("two FileBank instances on the same root have independent caches (no global state)", async () => {
+    const bank1 = new FileBank({ rootDir: tmpDir });
+    await bank1.upsertSkill(buildSkill({ identity: "id-1" }));
+    await bank1.listSkills(); // prime bank1's cache
+
+    const bank2 = new FileBank({ rootDir: tmpDir });
+    const fromBank2 = await bank2.listSkills();
+    expect(fromBank2).toHaveLength(1); // bank2 reads from disk fresh
+    // Mutate via bank2 — bank1's cache is now stale (operator's
+    // responsibility to use a fresh instance after external mutation).
+  });
+});
+
 describe("FileBank — vector search", () => {
   it("returns top-K skills sorted by cosine similarity", async () => {
     const bank = new FileBank({ rootDir: tmpDir });

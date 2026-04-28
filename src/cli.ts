@@ -14,7 +14,7 @@ import { printInitResult, runInit } from "./commands/init.js";
 import { printUpdateResult, runUpdate } from "./commands/update.js";
 import { parseArgv, parseRerankMode, parseTenantFlag } from "./lib/cli-args.js";
 
-const VERSION = "0.12.0";
+const VERSION = "0.13.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 

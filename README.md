@@ -636,8 +636,9 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.9.0 | shipped | + `init` command: scaffold a single skill or full pack from embedded templates. Output validates against the spec on first run |
 | v0.10.0 | shipped | + signed-tag verification at sync time. Closes the SECURITY.md tag-tampering threat model |
 | v0.11.0 | shipped | + `update` command: re-resolve subscribed refs, re-sync only on movement, GC orphan files from old SHAs, per-skill diff |
-| **v0.12.0** | **shipped** | + per-tenant audit scoping (`--tenant <id>` on exec/query/bench); intent-conditional rerank filters by tenant; SPEC §4.5.1; 349/349 tests |
-| v0.13.0 | planned | Sigstore + Rekor (Level 4) — keyless signing with public transparency log |
+| v0.12.0 | shipped | + per-tenant audit scoping (`--tenant <id>` on exec/query/bench); intent-conditional rerank filters by tenant; SPEC §4.5.1 |
+| **v0.13.0** | **shipped** | Cleanup + correctness: listSkills caching (perf), remove deprecated `rerank_applied` field, fix update.ts GC for multi-subscription edge case. 357/357 tests |
+| v0.14.0 | planned | Sigstore + Rekor (Level 4) — keyless signing with public transparency log |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
 ## Continuous validation

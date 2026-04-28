@@ -259,12 +259,34 @@ const updateOne = async (
   updated.sort();
   const unchangedCount = newSkills.length - added.length - updated.length;
 
-  // Garbage-collect: any skill from this source whose SHA isn't refNew is
-  // an orphan from a previous version. Drop it.
+  // Garbage-collect orphans (v0.13.0+, formerly issue #6 from the post-v0.11
+  // code review): drop any skill from THIS source whose SHA is neither
+  // the new SHA nor held by another active subscription targeting the
+  // same repo at a different ref.
+  //
+  // The previous (pre-v0.13) implementation matched by `repo@` prefix
+  // alone. That meant if the operator had two subscriptions to the same
+  // repo at different refs (e.g., `pack@v1.0.0` AND `pack@main`),
+  // updating either one would GC the other's skills. The skills would be
+  // re-fetched on the next sync of the affected subscription, but the
+  // intermediate state was visibly incorrect.
+  //
+  // Now: we collect every still-pinned SHA for this repo across ALL
+  // subscriptions, and refuse to GC any of those.
+  const allSubs = await bank.listSubscriptions();
+  const protectedShas = new Set<string>();
+  for (const otherSub of allSubs) {
+    if (otherSub.repo === repo && otherSub.id !== sub.id && otherSub.ref_resolved) {
+      protectedShas.add(otherSub.ref_resolved);
+    }
+  }
   let gcCount = 0;
   for (const skill of allAfter) {
     if (!skill.identity.startsWith(`${repo}@`)) continue;
     if (skill.identity.startsWith(`${repo}@${refNew}/`)) continue;
+    // Don't drop this skill if another subscription pins the SHA.
+    const skillSha = skill.provenance.ref_resolved_to;
+    if (skillSha && protectedShas.has(skillSha)) continue;
     const ok = await bank.removeSkill(skill.identity);
     if (ok) gcCount += 1;
   }

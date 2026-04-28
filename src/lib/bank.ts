@@ -155,12 +155,34 @@ export class FileBank {
   private readonly metaPath: string;
   private readonly auditPath: string;
 
+  /**
+   * In-memory cache for listSkills() (v0.13.0+). Each FileBank instance
+   * caches the parsed skill set on first read; subsequent reads are O(1).
+   * The cache is invalidated by every mutation (upsertSkill, removeSkill,
+   * reset). Process-lifetime only — a new FileBank instance starts cold.
+   *
+   * Why instance-scoped, not module-level: tests construct disposable
+   * banks in tmp dirs; sharing a global cache across instances would
+   * corrupt test state.
+   *
+   * Why no TTL: the bank file is always authoritative on the local disk,
+   * and the only writers are this very class. Stale cache is impossible
+   * unless an external process modifies the bank — in which case the
+   * caller should construct a fresh FileBank anyway.
+   */
+  private skillsCache: IndexedSkill[] | null = null;
+
   constructor(config: BankConfig = {}) {
     this.rootDir = config.rootDir ?? defaultBankRoot();
     this.skillsDir = join(this.rootDir, "skills");
     this.subsPath = join(this.rootDir, "subscriptions.json");
     this.metaPath = join(this.rootDir, "meta.json");
     this.auditPath = join(this.rootDir, "audit.jsonl");
+  }
+
+  /** Internal: drop the listSkills cache. Called by every mutator. */
+  private invalidateSkillsCache(): void {
+    this.skillsCache = null;
   }
 
   /** Ensure all expected directories exist. Idempotent. */
@@ -274,6 +296,7 @@ export class FileBank {
     await this.ensureDir();
     const path = join(this.skillsDir, identityToFilename(skill.identity));
     await writeFile(path, JSON.stringify(skill, null, 2), "utf8");
+    this.invalidateSkillsCache();
   }
 
   async getSkill(identity: string): Promise<IndexedSkill | null> {
@@ -287,11 +310,22 @@ export class FileBank {
   }
 
   async listSkills(): Promise<IndexedSkill[]> {
+    // Cache hit: every previous call's result is byte-stable until the
+    // next mutator (upsertSkill / removeSkill / reset). Returns the same
+    // array reference; callers MUST treat it as read-only (they already
+    // do — IndexedSkill is conceptually immutable).
+    if (this.skillsCache !== null) return this.skillsCache;
+
     let entries: string[];
     try {
       entries = await readdir(this.skillsDir);
     } catch (err) {
-      if (isMissing(err)) return []; // bank not synced yet
+      if (isMissing(err)) {
+        // Bank not synced yet. Cache the empty result so repeated cold
+        // calls don't keep retrying readdir.
+        this.skillsCache = [];
+        return this.skillsCache;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       throw new CliError(
         EXIT.RUNTIME,
@@ -311,6 +345,7 @@ export class FileBank {
         // returning a smaller-than-expected count.
       }
     }
+    this.skillsCache = skills;
     return skills;
   }
 
@@ -318,6 +353,7 @@ export class FileBank {
     const path = join(this.skillsDir, identityToFilename(identity));
     try {
       await rm(path);
+      this.invalidateSkillsCache();
       return true;
     } catch {
       return false;
@@ -441,6 +477,7 @@ export class FileBank {
     } catch {
       // already gone
     }
+    this.invalidateSkillsCache();
   }
 
   /** Public accessor for the root directory (e.g., for CLI UX). */
