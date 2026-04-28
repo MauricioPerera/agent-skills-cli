@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  detectSignatureMethod,
   enforceVerification,
   verifyGitHubTag,
   type SignatureVerification,
@@ -202,5 +203,162 @@ describe("enforceVerification", () => {
     expect(() =>
       enforceVerification(result, "github.com/me/pack", "v1.0.0"),
     ).toThrow(/Alice <alice@example\.com>/);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// detectSignatureMethod (v0.14.0+)
+// ────────────────────────────────────────────────────────────────────
+
+describe("detectSignatureMethod — structural PEM-header detection", () => {
+  it("returns 'gpg' for traditional OpenPGP-armored signatures", () => {
+    const gpgSig = `-----BEGIN PGP SIGNATURE-----
+
+iQIzBAABCgAdFiEE12345abc...
+-----END PGP SIGNATURE-----`;
+    expect(detectSignatureMethod(gpgSig)).toBe("gpg");
+  });
+
+  it("returns 'sigstore' for gitsign / Sigstore CMS signatures", () => {
+    const sigstoreSig = `-----BEGIN SIGNED MESSAGE-----
+MIIBuAYJKoZIhvcNAQcCoIIBqTCCAaUCAQExDzANBglghkgBZQMEAgEFADALBgkq...
+-----END SIGNED MESSAGE-----`;
+    expect(detectSignatureMethod(sigstoreSig)).toBe("sigstore");
+  });
+
+  it("returns undefined for unrecognised payloads", () => {
+    expect(detectSignatureMethod("just some random text")).toBeUndefined();
+    expect(detectSignatureMethod("-----BEGIN CERTIFICATE-----\n...")).toBeUndefined();
+  });
+
+  it("returns undefined for null / undefined / empty", () => {
+    expect(detectSignatureMethod(null)).toBeUndefined();
+    expect(detectSignatureMethod(undefined)).toBeUndefined();
+    expect(detectSignatureMethod("")).toBeUndefined();
+  });
+
+  it("detects the marker even with surrounding whitespace or trailing content", () => {
+    const padded = `\n\n  some preamble\n-----BEGIN PGP SIGNATURE-----\nactual sig\n-----END PGP SIGNATURE-----\nfooter\n`;
+    expect(detectSignatureMethod(padded)).toBe("gpg");
+  });
+
+  it("does NOT match a header substring without the full PEM line (avoids false positives)", () => {
+    // Just having the words "PGP SIGNATURE" elsewhere shouldn't trigger.
+    expect(detectSignatureMethod("PGP SIGNATURE algorithm: RSA")).toBeUndefined();
+    expect(detectSignatureMethod("BEGIN PGP SIGNATURE")).toBeUndefined();
+  });
+});
+
+describe("verifyGitHubTag — signature method propagated to result", () => {
+  // Reuse the mockFetch + okJson helpers from the top of the file.
+  const mockFetch = (handler: (url: string) => Response): typeof fetch =>
+    (async (url) => handler(url.toString())) as unknown as typeof fetch;
+  const okJson = (body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  it("status='valid' + Sigstore payload → result.method = 'sigstore'", async () => {
+    const fetchFn = mockFetch((u) => {
+      if (u.includes("/git/refs/tags/")) {
+        return okJson({ ref: "refs/tags/v1.0.0", object: { sha: "tag-sha", type: "tag" } });
+      }
+      if (u.includes("/git/tags/tag-sha")) {
+        return okJson({
+          tag: "v1.0.0",
+          tagger: { name: "Alice", email: "alice@example.com" },
+          verification: {
+            verified: true,
+            reason: "valid",
+            signature: "-----BEGIN SIGNED MESSAGE-----\nMIIBuAYJ...\n-----END SIGNED MESSAGE-----",
+            payload: "object ...",
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await verifyGitHubTag("github.com/me/pack", "v1.0.0", fetchFn);
+    expect(result.status).toBe("valid");
+    expect(result.method).toBe("sigstore");
+  });
+
+  it("status='valid' + GPG payload → result.method = 'gpg'", async () => {
+    const fetchFn = mockFetch((u) => {
+      if (u.includes("/git/refs/tags/")) {
+        return okJson({ ref: "refs/tags/v1.0.0", object: { sha: "tag-sha", type: "tag" } });
+      }
+      if (u.includes("/git/tags/tag-sha")) {
+        return okJson({
+          tag: "v1.0.0",
+          tagger: { name: "Bob", email: "bob@example.com" },
+          verification: {
+            verified: true,
+            reason: "valid",
+            signature: "-----BEGIN PGP SIGNATURE-----\niQIzBAABCgAd...\n-----END PGP SIGNATURE-----",
+            payload: "object ...",
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await verifyGitHubTag("github.com/me/pack", "v1.0.0", fetchFn);
+    expect(result.status).toBe("valid");
+    expect(result.method).toBe("gpg");
+  });
+
+  it("status='unsigned' → result.method is undefined (no payload to inspect)", async () => {
+    const fetchFn = mockFetch((u) => {
+      if (u.includes("/git/refs/tags/")) {
+        return okJson({ ref: "refs/tags/v1.0.0", object: { sha: "tag-sha", type: "tag" } });
+      }
+      if (u.includes("/git/tags/tag-sha")) {
+        return okJson({
+          tag: "v1.0.0",
+          tagger: { name: "Carol", email: "carol@example.com" },
+          verification: {
+            verified: false,
+            reason: "unsigned",
+            signature: null,
+            payload: null,
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await verifyGitHubTag("github.com/me/pack", "v1.0.0", fetchFn);
+    expect(result.status).toBe("unsigned");
+    expect(result.method).toBeUndefined();
+  });
+
+  it("status='invalid' + GPG payload → method still detected ('gpg' with status='invalid')", async () => {
+    // An invalid signature still has a payload; we surface the method for
+    // operator visibility — they can see WHICH crypto system failed.
+    const fetchFn = mockFetch((u) => {
+      if (u.includes("/git/refs/tags/")) {
+        return okJson({ ref: "refs/tags/v1.0.0", object: { sha: "tag-sha", type: "tag" } });
+      }
+      if (u.includes("/git/tags/tag-sha")) {
+        return okJson({
+          tag: "v1.0.0",
+          tagger: { email: "dave@example.com" },
+          verification: {
+            verified: false,
+            reason: "unknown_key",
+            signature: "-----BEGIN PGP SIGNATURE-----\n...\n-----END PGP SIGNATURE-----",
+            payload: "object ...",
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await verifyGitHubTag("github.com/me/pack", "v1.0.0", fetchFn);
+    expect(result.status).toBe("invalid");
+    expect(result.method).toBe("gpg");
+    expect(result.reason).toBe("unknown_key");
   });
 });

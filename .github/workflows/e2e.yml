@@ -174,14 +174,17 @@ jobs:
           # has become ambiguous (or one impl drifted from it).
           ts_sig_status=$(jq -r '.signature.status'  /tmp/ts-sync.json)
           ts_sig_reason=$(jq -r '.signature.reason'  /tmp/ts-sync.json)
+          ts_sig_method=$(jq -r '.signature.method // "null"' /tmp/ts-sync.json)
           py_sig_status=$(jq -r '.signature.status'  /tmp/py-sync.json)
           py_sig_reason=$(jq -r '.signature.reason'  /tmp/py-sync.json)
+          py_sig_method=$(jq -r '.signature.method // "null"' /tmp/py-sync.json)
 
           echo ""
           echo "=== Signature parity (SPEC §5.1) ==="
           echo "                TS                                          PY"
           echo "status          $ts_sig_status                                  $py_sig_status"
           echo "reason          \"$ts_sig_reason\"     \"$py_sig_reason\""
+          echo "method          $ts_sig_method                                  $py_sig_method"
           echo ""
 
           fail=0
@@ -193,6 +196,10 @@ jobs:
             echo "::error::signature.reason mismatch: TS='$ts_sig_reason' PY='$py_sig_reason'. The reason text is part of the operator-facing signal; keep them aligned."
             fail=1
           fi
+          if [ "$ts_sig_method" != "$py_sig_method" ]; then
+            echo "::error::signature.method mismatch: TS='$ts_sig_method' PY='$py_sig_method'. v0.14.0+ field; both impls must agree on the structural detection."
+            fail=1
+          fi
           if [ $fail -ne 0 ]; then exit 1; fi
 
           # Confirm both impls reported a status from the legal enumeration.
@@ -200,7 +207,12 @@ jobs:
             valid|invalid|unsigned|unverified) ;;
             *) echo "::error::TS reported illegal signature.status: '$ts_sig_status'"; exit 1 ;;
           esac
-          echo "✓ Both implementations agree on signature.status='$ts_sig_status' with identical reason."
+          # Method may be null (no payload, e.g. unverified/unsigned), gpg, or sigstore.
+          case "$ts_sig_method" in
+            null|gpg|sigstore) ;;
+            *) echo "::error::TS reported illegal signature.method: '$ts_sig_method'"; exit 1 ;;
+          esac
+          echo "✓ Both implementations agree on signature.status='$ts_sig_status' / method='$ts_sig_method' with identical reason."
 
       - name: Upload sync + bench results as artifact
         if: always()

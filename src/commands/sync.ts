@@ -248,6 +248,7 @@ export const runSync = async (opts: SyncOptions): Promise<SyncResult> => {
         refRequested,
         signatureStatus: signature.status,
         signedBy: signature.signed_by,
+        signatureMethod: signature.method,
       });
     }
   };
@@ -292,8 +293,9 @@ const syncSingleSkill = async (params: {
   refRequested: string;
   signatureStatus: SignatureStatus;
   signedBy?: string;
+  signatureMethod?: "gpg" | "sigstore";
 }): Promise<SyncSkillResult> => {
-  const { entry, repo, sha, urlTemplate, bank, embedder, fetchImpl, refRequested, signatureStatus, signedBy } = params;
+  const { entry, repo, sha, urlTemplate, bank, embedder, fetchImpl, refRequested, signatureStatus, signedBy, signatureMethod } = params;
 
   const url = entry.url
     ?? (urlTemplate
@@ -363,6 +365,7 @@ const syncSingleSkill = async (params: {
       fetched_at: now,
       signature_status: signatureStatus,
       ...(signedBy !== undefined ? { signed_by: signedBy } : {}),
+      ...(signatureMethod !== undefined ? { signature_method: signatureMethod } : {}),
     },
     embedding,
     embedding_model: embedder.name,

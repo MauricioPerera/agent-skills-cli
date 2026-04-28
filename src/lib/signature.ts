@@ -38,13 +38,60 @@ import { CliError, EXIT } from "./errors.js";
  */
 export type SignatureStatus = "valid" | "invalid" | "unsigned" | "unverified";
 
+/**
+ * Cryptographic method used to sign the tag, when detectable (v0.14.0+).
+ *
+ *   - "gpg":      classic OpenPGP-armored signature ("-----BEGIN PGP SIGNATURE-----").
+ *                 Trust comes from a long-lived key in the publisher's GitHub
+ *                 account or a keyring on the verifier's side.
+ *   - "sigstore": gitsign-style CMS signature ("-----BEGIN SIGNED MESSAGE-----")
+ *                 using a Fulcio-issued ephemeral cert + Rekor transparency log.
+ *                 Detection is structural (PEM header), not full Level 4
+ *                 verification — the Rekor inclusion proof is NOT verified
+ *                 client-side in v0.14. That work is queued for v0.15+ and the
+ *                 spec calls it Level 4. Today, a "sigstore"-method signature
+ *                 with status "valid" means GitHub verified the cert chain
+ *                 (Level 3a-equivalent trust, modulo Sigstore's identity model).
+ *
+ * Undefined when the signature payload is absent (status == "unsigned" or
+ * "unverified") or the format wasn't recognised.
+ */
+export type SignatureMethod = "gpg" | "sigstore";
+
 export interface SignatureVerification {
   status: SignatureStatus;
   /** Free-text reason from the host (e.g., "unsigned", "unknown_key", "valid"). */
   reason: string;
   /** Tagger's identity if the host exposes it. Useful for audit display. */
   signed_by?: string;
+  /** Detected signing method when a payload is present. v0.14.0+. */
+  method?: SignatureMethod;
 }
+
+/**
+ * Inspect an OpenPGP-armored signature payload and detect whether it's a
+ * traditional GPG signature or a gitsign/Sigstore CMS signature.
+ *
+ * The detection is structural: the PEM header itself differs.
+ *   "-----BEGIN PGP SIGNATURE-----"   → GPG
+ *   "-----BEGIN SIGNED MESSAGE-----"  → gitsign / Sigstore
+ *
+ * This is robust (not a heuristic on payload contents) but NOT a verification.
+ * It just tells you WHICH cryptographic system the publisher used. The
+ * verification verdict comes from the host's API (status === "valid").
+ *
+ * Returns undefined for unrecognised payloads (e.g., empty, malformed, or a
+ * format we don't yet handle).
+ */
+export const detectSignatureMethod = (
+  signature: string | null | undefined,
+): SignatureMethod | undefined => {
+  if (typeof signature !== "string" || signature.length === 0) return undefined;
+  // Both PGP and CMS PEM markers are case-sensitive 5-dash framed lines.
+  if (signature.includes("-----BEGIN PGP SIGNATURE-----")) return "gpg";
+  if (signature.includes("-----BEGIN SIGNED MESSAGE-----")) return "sigstore";
+  return undefined;
+};
 
 interface GitHubTagObject {
   tag?: string;
@@ -152,12 +199,16 @@ export const verifyGitHubTag = async (
   }
 
   const reason = verification.reason ?? "unknown";
+  // Detect signing method from the payload (v0.14.0+). Undefined when no
+  // payload is present (i.e., unsigned tags) or the format is unrecognised.
+  const method = detectSignatureMethod(verification.signature);
 
   if (verification.verified === true) {
     return {
       status: "valid",
       reason,
       ...(signedBy !== undefined ? { signed_by: signedBy } : {}),
+      ...(method !== undefined ? { method } : {}),
     };
   }
 
@@ -175,6 +226,7 @@ export const verifyGitHubTag = async (
     status: "invalid",
     reason,
     ...(signedBy !== undefined ? { signed_by: signedBy } : {}),
+    ...(method !== undefined ? { method } : {}),
   };
 };
 

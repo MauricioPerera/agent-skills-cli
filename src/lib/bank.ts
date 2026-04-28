@@ -63,6 +63,16 @@ export interface SkillProvenance {
   fetched_at: string;
   signature_status: "unsigned" | "valid" | "invalid" | "unverified";
   signed_by?: string;
+  /**
+   * Signing method when status === "valid" or "invalid" (v0.14.0+).
+   * "gpg" — classic OpenPGP signature.
+   * "sigstore" — gitsign / Sigstore CMS signature (Fulcio cert + Rekor entry).
+   * Detection is structural (PEM header). Full Rekor inclusion-proof
+   * verification (the spec's Level 4) is queued for v0.15+; v0.14 surfaces
+   * the method so operators can see WHICH crypto system was used while the
+   * Level 4 verifier ships separately.
+   */
+  signature_method?: "gpg" | "sigstore";
   publisher_verified?: boolean;
   embedding_truncated?: boolean;
 }

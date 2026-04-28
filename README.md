@@ -640,8 +640,9 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.13.0 | shipped | Cleanup + correctness: listSkills caching (perf), remove deprecated `rerank_applied` field, fix update.ts GC for multi-subscription edge case |
 | v0.13.1 | shipped | + listAudit caching (closes the last perf debt from the post-v0.11 code review). 363/363 tests; 8/10 review issues fixed |
 | v0.13.2 | shipped | Docs alignment patch: stale install/version refs across READMEs, init scaffolded CI workflow now pins v0.13.1, BENCHMARK.md updated. Plus a hotfix for a CI type-check break introduced in v0.13.1 |
-| **v0.13.3** | **shipped** | + `gc_protected` counter in update results (visibility into multi-sub GC); narrowed `Subscription.source_type` from `"git" \| "url"` to `"git"` (URL-only sub was always aspirational, never implemented). 10/10 review issues fixed |
-| v0.14.0 | planned | Sigstore + Rekor (Level 4) — keyless signing with public transparency log |
+| v0.13.3 | shipped | + `gc_protected` counter in update results (visibility into multi-sub GC); narrowed `Subscription.source_type` from `"git" \| "url"` to `"git"`. 10/10 review issues fixed |
+| **v0.14.0** | **shipped** | + Sigstore signature **detection** (structural via PEM header — `gpg` vs `sigstore` / `gitsign`). Full Rekor inclusion-proof verification (Level 4 enforcement) queued for v0.15. Cross-impl parity (TS + Python) maintained in CI |
+| v0.15.0 | planned | Sigstore Level 4 enforcement (Rekor inclusion-proof verification) — completes the Level 4 trust path |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
 ## Continuous validation
