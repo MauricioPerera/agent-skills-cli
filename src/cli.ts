@@ -7,8 +7,9 @@ import { printResolveResult, runResolve } from "./commands/resolve.js";
 import { printValidateResult, runValidate } from "./commands/validate.js";
 import { runSync } from "./commands/sync.js";
 import { printQueryResult, runQuery } from "./commands/query.js";
+import { printExecResult, runExec } from "./commands/exec.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -24,6 +25,11 @@ Commands (network — require Cloudflare Workers AI credentials):
   sync <repo>[@<ref>]              Fetch + embed + index skills from a git source.
                                    Default ref: main.
   query "<intent>" [--k N]         Find the top-K skills matching an intent.
+
+Commands (local, no embedding API needed):
+  exec <skill> --args <json>       Substitute placeholders + execute via bash.
+                                   <skill> = full identity OR short id (e.g., "http-get").
+  audit [--limit N] [--skill <id>] Print recent audit entries from the bank.
   list                             List all subscriptions in the local bank.
   reset                            Wipe all bank state (asks for confirmation).
 
@@ -36,6 +42,12 @@ Flags (per command):
   --skip-validation     (resolve only) Skip schema validation before substituting.
   --k N                 (query) Top-K hits to return. Default 5.
   --bank-dir <path>     Override default bank state directory.
+  --dry-run             (exec) Resolve + validate but do NOT execute. Print the command.
+  --timeout-sec N       (exec) Hard timeout. Default 60.
+  --no-audit            (exec) Skip audit log entry.
+  --intent "<text>"     (exec) Record this intent in the audit entry.
+  --limit N             (audit) Max entries to print. Default 20.
+  --skill <id>          (audit) Filter to one skill identity.
 
 Cloudflare Workers AI environment (for sync + query):
   CF_ACCOUNT_ID         Your Cloudflare account ID (32 hex chars).
@@ -252,6 +264,84 @@ const main = async (): Promise<void> => {
     });
     const result = await runQuery({ intent, k, bank, embedder });
     printQueryResult(result, asJson);
+    process.exit(EXIT.OK);
+  }
+
+  if (cmd === "exec") {
+    const skillIdentifier = args.positional[1];
+    if (skillIdentifier === undefined) {
+      throw new CliError(EXIT.USAGE, "exec: missing <skill> argument (full identity or short id)");
+    }
+    const argsJson = args.flags.get("args");
+    if (typeof argsJson !== "string") {
+      throw new CliError(
+        EXIT.USAGE,
+        "exec: missing --args <json>; use --args '{}' for a no-arg skill",
+      );
+    }
+    let argsObj: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(argsJson);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("--args must be a JSON object");
+      }
+      argsObj = parsed as Record<string, unknown>;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new CliError(EXIT.USAGE, `invalid --args JSON: ${msg}`);
+    }
+
+    const dryRun = args.flags.get("dry-run") === true;
+    const noAudit = args.flags.get("no-audit") === true;
+    const timeoutFlag = args.flags.get("timeout-sec");
+    const timeoutSec = typeof timeoutFlag === "string" ? Number(timeoutFlag) : undefined;
+    const intentFlag = args.flags.get("intent");
+    const intent = typeof intentFlag === "string" ? intentFlag : undefined;
+
+    const result = await runExec({
+      bank,
+      skillIdentifier,
+      args: argsObj,
+      dryRun,
+      timeoutSec,
+      noAudit,
+      intent,
+    });
+
+    if (dryRun) {
+      // Always print the resolved command in dry-run mode (regardless of --json)
+      if (asJson) {
+        process.stdout.write(JSON.stringify(result) + "\n");
+      } else {
+        process.stdout.write(`[dry-run] resolved skill: ${result.skill_identity}\n`);
+        process.stdout.write(`[dry-run] command:\n  ${result.command}\n`);
+      }
+      process.exit(EXIT.OK);
+    }
+
+    printExecResult(result, asJson);
+    process.exit(result.exit_code);
+  }
+
+  if (cmd === "audit") {
+    const limitFlag = args.flags.get("limit");
+    const limit = typeof limitFlag === "string" ? Number(limitFlag) : 20;
+    const skillFilterFlag = args.flags.get("skill");
+    const skill_id = typeof skillFilterFlag === "string" ? skillFilterFlag : undefined;
+    const opts: { limit?: number; skill_id?: string } = { limit };
+    if (skill_id !== undefined) opts.skill_id = skill_id;
+    const entries = await bank.listAudit(opts);
+    if (asJson) {
+      process.stdout.write(JSON.stringify(entries) + "\n");
+    } else if (entries.length === 0) {
+      process.stdout.write("(no audit entries)\n");
+    } else {
+      for (const e of entries) {
+        const status = e.exit_code === 0 ? "✓" : `✗ exit=${e.exit_code}`;
+        process.stdout.write(`${e.timestamp}  ${status}  ${e.skill_id}  (${e.elapsed_ms}ms)\n`);
+        if (e.intent !== undefined) process.stdout.write(`    intent: ${e.intent}\n`);
+      }
+    }
     process.exit(EXIT.OK);
   }
 

@@ -1,7 +1,7 @@
 {
   "name": "agent-skills-cli",
-  "version": "0.2.0",
-  "description": "Reference CLI for the agent-skills specification: validate SKILL.md files and resolve command_template against arg values.",
+  "version": "0.3.0",
+  "description": "Reference CLI for the agent-skills specification: validate, sync, query, resolve, and exec skills end-to-end with audit log + Cloudflare Workers AI embeddings.",
   "license": "MIT",
   "author": "Mauricio Perera",
   "repository": {

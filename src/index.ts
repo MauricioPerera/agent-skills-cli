@@ -51,6 +51,7 @@ export type {
   BankMeta,
   BankConfig,
   SearchHit,
+  AuditEntry,
 } from "./lib/bank.js";
 
 // Command entry points (also exposed for programmatic use)
@@ -69,3 +70,6 @@ export type {
 
 export { runQuery, printQueryResult } from "./commands/query.js";
 export type { QueryOptions, QueryResult, QueryHit } from "./commands/query.js";
+
+export { runExec, printExecResult } from "./commands/exec.js";
+export type { ExecOptions, ExecResult } from "./commands/exec.js";

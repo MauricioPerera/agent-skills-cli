@@ -13,7 +13,16 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
-**v0.2.0** — first production reference. Implements local commands (`validate`, `resolve`) and network commands (`sync`, `query`, `list`, `reset`) backed by **Cloudflare Workers AI** for embeddings. End-to-end loop: subscribe to a skill pack on GitHub → embed every skill → query by intent → get back a resolved bash command.
+**v0.3.0** — closes the agent-skills loop end-to-end. The CLI can now:
+
+```
+sync   → pulls + embeds + indexes a skill pack from any git source
+query  → finds the right skill from a natural-language intent
+exec   → runs the resolved command via bash + appends an audit entry
+audit  → inspects the local audit log for past executions
+```
+
+Plus the local-only ones from earlier alphas (`validate`, `resolve`) and bank management (`list`, `reset`).
 
 > **Empirical validation** (35 paraphrases × 3 embedding models = 105 query evaluations against the public skill pack):
 > - **Top-1 accuracy**: 97-100% depending on model.
@@ -152,6 +161,51 @@ agent-skills resolve skills/charge-customer/SKILL.md --args '{"amount":1000,...}
 
 (With `$STRIPE_SECRET_KEY` set in your environment.)
 
+### `agent-skills exec <skill> --args '<json>'` *(v0.3.0+)*
+
+Resolve and **execute** a skill from your local bank in one step. Spawns `bash -c <resolved-command>`, captures stdout/stderr/exit-code, appends an audit entry. Inherits the parent process's env (so `$STRIPE_SECRET_KEY`, `$GH_TOKEN`, etc. work).
+
+```bash
+# Identify a skill by short id (must be unique across the bank) or full identity
+$ agent-skills exec base64-encode --args '{"value":"hello world"}'
+aGVsbG8gd29ybGQ=
+
+# Or:
+$ agent-skills exec github.com/MauricioPerera/agent-skills-pack@<sha>/http-get \
+    --args '{"url":"https://example.com","timeout":10}'
+```
+
+Flags:
+
+- `--dry-run` — resolve + validate, print the command, but **do not execute**.
+- `--timeout-sec N` — hard timeout. Default 60s. After it fires, SIGTERM, then 2s grace, then SIGKILL, then forced resolution at +4s if the proc still hasn't reaped (Windows msys / Git Bash safety net).
+- `--no-audit` — skip the audit log entry.
+- `--intent "<text>"` — record the original user intent in the audit entry (useful when called from a query→exec pipeline).
+- `--json` — return the full result as JSON (`{skill_identity, command, exit_code, stdout, stderr, elapsed_ms, timed_out, dry_run}`).
+
+The CLI's exit code matches the executed command's exit code (the agent can dispatch on `$?` directly).
+
+**Sensitive args are redacted in the audit log.** A skill author marks an arg with `sensitive: true` in its `args` schema; the CLI substitutes `"<redacted>"` in the audit JSONL even though the value still flows to the bash subprocess at exec time.
+
+### `agent-skills audit [--limit N] [--skill <id>]`
+
+Inspect the local audit log (append-only JSONL at `<bank>/audit.jsonl`).
+
+```bash
+$ agent-skills audit --limit 5
+2026-04-28T06:18:02.048Z  ✓  github.com/MauricioPerera/agent-skills-pack@.../read-file  (124ms)
+2026-04-28T06:18:00.444Z  ✓  github.com/MauricioPerera/agent-skills-pack@.../base64-encode  (232ms)
+    intent: encode hello as base64
+```
+
+Filter by skill identity to see one tool's usage history:
+
+```bash
+$ agent-skills audit --skill github.com/.../base64-encode --json | jq '.[] | {timestamp, exit_code, args}'
+```
+
+The audit log is **local only** (per [SPEC §8 P3](https://github.com/MauricioPerera/agent-skills/blob/main/SPEC.md#8-privacy-invariants)) — it never leaves your machine.
+
 ## Library usage
 
 The CLI is also a library, importable in your own TypeScript:
@@ -198,10 +252,11 @@ Make sure your dependency line uses the published version:
 | Version | Status | Scope |
 |---|---|---|
 | v0.2.0-alpha | shipped | `validate` + `resolve` (local-only) + library API |
-| **v0.2.0** | **shipped** | + `sync` + `query` + `list` + `reset`; Cloudflare Workers AI embeddings |
-| v0.3.0 | planned | `exec` (run resolved command + audit log); `publish` (skill author tooling); Ollama / OpenAI / generic HTTP embedding providers |
-| v0.4.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
-| v0.5.0 | planned | IVF-style ANN backend (swap-in for FileBank when catalog grows) |
+| v0.2.0 | shipped | + `sync` + `query` + `list` + `reset`; Cloudflare Workers AI embeddings |
+| **v0.3.0** | **shipped** | + `exec` (bash subprocess + 3-stage kill ladder + sensitive-arg redaction) + `audit` (append-only JSONL log); 154/154 tests; closes agent loop end-to-end |
+| v0.4.0 | planned | `publish` (skill author tooling: validate + stamp + git tag); multi-provider embeddings (Ollama, OpenAI, generic HTTP) |
+| v0.5.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
+| v0.6.0 | planned | IVF-style ANN backend (swap-in for FileBank when catalog grows) |
 | v1.0.0 | planned | Stable API + full SPEC v1.0 coverage |
 
 ## Sister projects

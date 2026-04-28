@@ -10,7 +10,7 @@
 // a vector-indexed bank like the just-bash-data reference (IMPLEMENTATION.md)
 // is recommended; this one uses brute-force cosine search.
 
-import { mkdir, readFile, readdir, writeFile, rm } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, writeFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -72,6 +72,33 @@ export interface SearchHit {
   score: number;
 }
 
+/**
+ * Audit log entry per SPEC §4.5. Banks SHOULD record one of these per exec
+ * invocation. Sensitive arg values are redacted upstream (in resolveCommand).
+ */
+export interface AuditEntry {
+  /** ISO-8601 timestamp at exec start. Doubles as primary key. */
+  timestamp: string;
+  /** Full skill identity per SPEC §1. */
+  skill_id: string;
+  /** Optional: the natural-language intent that led to this skill (from query). */
+  intent?: string;
+  /** Substituted args at call time. Sensitive values are redacted to "<redacted>". */
+  args: Record<string, unknown>;
+  /** Process exit code. 0 = success. */
+  exit_code: number;
+  /** Wall-clock elapsed time. */
+  elapsed_ms: number;
+  /** Optional: agent or user rating, 1-5. */
+  rating?: number;
+  /** Optional: free-form notes. */
+  notes?: string;
+  /** Whether stdout was captured (some banks may not store the body for size). */
+  stdout_bytes?: number;
+  /** Whether stderr was non-empty. */
+  stderr_bytes?: number;
+}
+
 export interface BankConfig {
   /** Root directory for the bank's state. Default: ~/.config/agent-skills/ */
   rootDir?: string;
@@ -101,12 +128,14 @@ export class FileBank {
   private readonly skillsDir: string;
   private readonly subsPath: string;
   private readonly metaPath: string;
+  private readonly auditPath: string;
 
   constructor(config: BankConfig = {}) {
     this.rootDir = config.rootDir ?? defaultBankRoot();
     this.skillsDir = join(this.rootDir, "skills");
     this.subsPath = join(this.rootDir, "subscriptions.json");
     this.metaPath = join(this.rootDir, "meta.json");
+    this.auditPath = join(this.rootDir, "audit.jsonl");
   }
 
   /** Ensure all expected directories exist. Idempotent. */
@@ -243,6 +272,86 @@ export class FileBank {
     }));
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, k);
+  }
+
+  // ─── Identity resolution ─────────────────────────────────────────────
+
+  /**
+   * Find skills by their short `id` (the frontmatter field, e.g., "http-get"),
+   * not the full identity. Returns ALL matches — possibly multiple if two
+   * subscribed packs both publish a skill with the same id.
+   */
+  async findByShortId(shortId: string): Promise<IndexedSkill[]> {
+    const all = await this.listSkills();
+    return all.filter((s) => s.id === shortId);
+  }
+
+  /**
+   * Resolve a user-supplied identifier to a unique skill. Accepts either:
+   *   - A full identity (`<source>@<ref>/<path>`)
+   *   - A short id (`http-get`); requires exactly one match in the bank.
+   *
+   * Throws CliError on ambiguity (multiple matches) or not-found.
+   */
+  async resolveIdentifier(input: string): Promise<IndexedSkill> {
+    // First try direct lookup by full identity
+    const direct = await this.getSkill(input);
+    if (direct !== null) return direct;
+
+    // Then try short id resolution
+    const matches = await this.findByShortId(input);
+    if (matches.length === 1) return matches[0] as IndexedSkill;
+
+    if (matches.length > 1) {
+      const candidates = matches.map((s) => s.identity).join("\n  - ");
+      throw new CliError(
+        EXIT.USAGE,
+        `'${input}' is ambiguous; multiple skills match:\n  - ${candidates}\nUse the full identity instead.`,
+      );
+    }
+
+    throw new CliError(
+      EXIT.NOT_FOUND,
+      `no skill found matching '${input}' in bank ${this.rootDir}. Run 'agent-skills sync <repo>' or check 'agent-skills list'.`,
+    );
+  }
+
+  // ─── Audit log (append-only JSONL) ──────────────────────────────────
+
+  /**
+   * Append a single audit entry. JSONL format: one JSON object per line.
+   * Append-only so the log is tamper-evident at the filesystem level.
+   */
+  async appendAudit(entry: AuditEntry): Promise<void> {
+    await this.ensureDir();
+    const line = JSON.stringify(entry) + "\n";
+    await appendFile(this.auditPath, line, "utf8");
+  }
+
+  /**
+   * Read recent audit entries, optionally filtered by skill_id. Returns the
+   * MOST RECENT first (newest at index 0).
+   */
+  async listAudit(opts: { limit?: number; skill_id?: string } = {}): Promise<AuditEntry[]> {
+    let text: string;
+    try {
+      text = await readFile(this.auditPath, "utf8");
+    } catch {
+      return [];
+    }
+    const lines = text.split("\n").filter((l) => l.length > 0);
+    const entries: AuditEntry[] = [];
+    for (const line of lines) {
+      try {
+        const e = JSON.parse(line) as AuditEntry;
+        if (opts.skill_id !== undefined && e.skill_id !== opts.skill_id) continue;
+        entries.push(e);
+      } catch {
+        // skip corrupt lines (the whole point of JSONL is partial-failure resilience)
+      }
+    }
+    entries.reverse(); // newest first
+    return opts.limit !== undefined ? entries.slice(0, opts.limit) : entries;
   }
 
   // ─── Reset ───────────────────────────────────────────────────────────
