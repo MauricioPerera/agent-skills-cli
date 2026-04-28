@@ -15,6 +15,8 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 **v0.2.0** — first production reference. Implements local commands (`validate`, `resolve`) and network commands (`sync`, `query`, `list`, `reset`) backed by **Cloudflare Workers AI** for embeddings. End-to-end loop: subscribe to a skill pack on GitHub → embed every skill → query by intent → get back a resolved bash command.
 
+> **Empirical validation**: 7 / 7 agent intents matched their intended skill as top-1 against the [agent-skills-pack v1.0.0](https://github.com/MauricioPerera/agent-skills-pack) corpus (`bge-base-en-v1.5`, 768-dim). See [BENCHMARK.md](./BENCHMARK.md) for the full table.
+
 ## Install
 
 ```bash
