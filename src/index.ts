@@ -130,3 +130,6 @@ export type {
   PublishResult,
   PublishSkillResult,
 } from "./commands/publish.js";
+
+export { runInit, printInitResult } from "./commands/init.js";
+export type { InitOptions, InitResult } from "./commands/init.js";

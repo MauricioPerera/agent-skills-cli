@@ -13,6 +13,31 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
+**v0.9.0** — `init` command. Scaffolds a single skill or an entire skill pack from embedded templates. The output is publish-ready on the first run:
+
+```bash
+$ agent-skills init my-pack --pack --author "Alice"
+init pack: my-pack
+
+Wrote 5 file(s):
+  + skills/hello-world/SKILL.md
+  + llms.txt
+  + README.md
+  + .gitignore
+  + .github/workflows/validate.yml
+
+$ cd my-pack && agent-skills publish --check-only
+Publish 1 skill(s) from .
+  · hello-world                   1.0.0
+summary: 0 added, 0 updated, 1 unchanged    # ← clean validation, first try
+```
+
+Two modes:
+- `init <name>` — adds `skills/<name>/SKILL.md` to an existing pack (with all spec fields commented for discoverability).
+- `init <name> --pack` — scaffolds a brand-new pack with `skills/`, `llms.txt`, `README.md`, `.gitignore`, and a CI workflow.
+
+The scaffolded `SKILL.md` always validates against the spec on the first run, so `agent-skills publish --check-only` is green immediately. THEN the author edits.
+
 **v0.8.0** — `publish` command for skill-pack authors. Closes the author side of the loop:
 
 ```bash
@@ -361,6 +386,57 @@ agent-skills bench bench-truth.jsonl --json > result.json
 
 The public skill pack ships its own truth file at [`agent-skills-pack/bench-truth.jsonl`](https://github.com/MauricioPerera/agent-skills-pack/blob/main/bench-truth.jsonl) — 35 paraphrases × 7 skills.
 
+### `agent-skills init <name> [--pack] [--in <dir>]` *(v0.9.0+)*
+
+Scaffolds a new skill (single mode) or a complete skill pack (`--pack` mode) from embedded templates. The generated `SKILL.md` is **publish-ready on the first run** — `agent-skills publish --check-only` is green immediately. Then the author edits.
+
+**Single-skill mode** (use inside an existing pack):
+
+```bash
+$ cd my-skill-pack/
+$ agent-skills init scrape-website
+init skill: my-skill-pack
+
+Wrote 1 file(s):
+  + skills/scrape-website/SKILL.md
+
+Next:
+  edit skills/scrape-website/SKILL.md
+  agent-skills publish --check-only   # validate + refresh skills-index.json
+```
+
+**Pack mode** (start a brand-new skill pack):
+
+```bash
+$ agent-skills init my-pack --pack --author "Alice"
+init pack: my-pack
+
+Wrote 5 file(s):
+  + skills/hello-world/SKILL.md
+  + llms.txt
+  + README.md
+  + .gitignore
+  + .github/workflows/validate.yml
+
+Next:
+  cd my-pack
+  agent-skills publish --check-only   # should be a clean validation
+  git init && git add . && git commit -m "Initial pack"
+  # Then add the GitHub topic 'agent-skills' and publish a tagged release.
+```
+
+The scaffolded `hello-world` skill is a working `echo` wrapper with a strict pattern arg. It's intentionally minimal so the author has the smallest possible diff to make it real.
+
+**Discoverability surface**: the generated `SKILL.md` includes **every optional frontmatter field commented out** with a one-line explanation per field — `applicable_when`, `network`, `examples`, `tags`, `category`, `idempotent`, `chain`. Authors discover the spec by editing the scaffold rather than reading SPEC.md.
+
+**Flags**:
+- `--pack` — scaffold a whole pack at `./<name>/` instead of a single skill at `./skills/<name>/`.
+- `--in <dir>` — root directory. Default: `.` (cwd).
+- `--author <name>` — inject as `author.name` (single mode) and the README/llms.txt headers (pack mode).
+- `--force` — overwrite existing files. Default: refuse.
+
+Refusing to overwrite is **per-file**: re-running `init` on a partially-built pack fills in only the files that don't exist yet, leaving your edits alone.
+
 ### `agent-skills publish [<dir>]` *(v0.8.0+)*
 
 Author-side command. Validates every `SKILL.md` under `<dir>/skills/`, generates or updates `<dir>/skills-index.json`, and optionally creates a signed git tag.
@@ -459,8 +535,9 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.6.0 | shipped | + Ollama (local, zero-credential) + OpenAI / OpenAI-compatible (Together / vLLM / TEI / infinity / …) embedding providers; auto-detect from env or `EMBEDDING_PROVIDER` flag |
 | v0.6.1 | shipped | + 4 code-review patches (docstring, pure-Node PATH scan, ENOENT discrimination, bounded-concurrency sync) |
 | v0.7.0 | shipped | + `bench` subcommand: reproducible top-K accuracy against a JSONL/JSON-array truth file. CI integration via JSON output + non-zero exit on any failure |
-| **v0.8.0** | **shipped** | + `publish` command: validate skills/, generate skills-index.json (preserves hand-crafted summaries + curated ordering), optionally git-tag. 256/256 tests; idempotent on real packs |
-| v0.9.0 | planned | Per-tenant audit scoping (`--user <id>`); Sigstore signature verification |
+| v0.8.0 | shipped | + `publish` command: validate skills/, generate skills-index.json (preserves hand-crafted summaries + curated ordering), optionally git-tag |
+| **v0.9.0** | **shipped** | + `init` command: scaffold a single skill or full pack from embedded templates. Output validates against the spec on first run. 271/271 tests |
+| v0.10.0 | planned | Per-tenant audit scoping (`--user <id>`); Sigstore signature verification |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
 ## Sister projects

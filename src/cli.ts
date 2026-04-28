@@ -10,8 +10,9 @@ import { printQueryResult, runQuery } from "./commands/query.js";
 import { printExecResult, runExec } from "./commands/exec.js";
 import { printBenchResult, runBench } from "./commands/bench.js";
 import { printPublishResult, runPublish } from "./commands/publish.js";
+import { printInitResult, runInit } from "./commands/init.js";
 
-const VERSION = "0.8.0";
+const VERSION = "0.9.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -38,6 +39,10 @@ Commands (local, no embedding API needed):
   reset                            Wipe all bank state (asks for confirmation).
 
 Author commands (local, no bank needed):
+  init <name>                      Scaffold skills/<name>/SKILL.md with all
+                                   spec fields commented for discoverability.
+  init <name> --pack               Scaffold an entire pack at ./<name>/:
+                                   skills/, llms.txt, README, .gitignore, CI.
   publish [<dir>]                  Validate skills/, generate skills-index.json,
                                    optionally git tag. Use in your skill-pack repo.
 
@@ -69,6 +74,10 @@ Flags (per command):
                         Used on first publish; existing index wins on re-publish.
   --branch <name>       (publish) Set default_source.default_branch. Default: main.
   --ref <ref>           (publish) Set latest_release for resolved skill URLs (e.g., v1.0.0).
+  --pack                (init) Scaffold a whole pack instead of a single skill.
+  --in <dir>            (init) Root directory. Default: . (cwd).
+  --author <name>       (init) Inject as author.name in the skill template.
+  --force               (init) Overwrite existing files instead of refusing.
 
 Embedding providers (v0.6.0+ — auto-detected from env, or set EMBEDDING_PROVIDER):
 
@@ -184,6 +193,35 @@ const main = async (): Promise<void> => {
     const result = await runValidate({ file, json: asJson });
     printValidateResult(result, asJson);
     process.exit(result.valid ? EXIT.OK : EXIT.VALIDATION);
+  }
+
+  if (cmd === "init") {
+    const name = args.positional[1];
+    if (name === undefined) {
+      throw new CliError(
+        EXIT.USAGE,
+        "init: missing <name> argument (the skill id, or pack name with --pack)",
+      );
+    }
+    const pack = args.flags.get("pack") === true;
+    const force = args.flags.get("force") === true;
+    const dirFlag = args.flags.get("in");
+    const authorFlag = args.flags.get("author");
+    const result = await runInit({
+      name,
+      pack,
+      force,
+      dir: typeof dirFlag === "string" ? dirFlag : undefined,
+      authorName: typeof authorFlag === "string" ? authorFlag : undefined,
+    });
+    printInitResult(result, asJson);
+    // Exit 0 if anything was written; non-zero if everything was skipped
+    // and the user didn't use --force (signals "you didn't get what you asked for").
+    process.exit(
+      result.files_written.length === 0 && result.files_skipped.length > 0 && !force
+        ? EXIT.RUNTIME
+        : EXIT.OK,
+    );
   }
 
   if (cmd === "publish") {
