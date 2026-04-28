@@ -75,6 +75,26 @@ export interface SkillProvenance {
    * sound Level 4 path and is not yet implemented client-side.
    */
   signature_method?: "gpg" | "ssh" | "sigstore";
+  /**
+   * Sigstore identity claim from the Fulcio cert (v0.16.0+). Populated only
+   * when signature_method === "sigstore" and CMS parsing succeeds.
+   *
+   *   - subject:      OIDC subject from cert SAN (email or workflow URI).
+   *   - subject_type: "email" | "uri" | "other".
+   *   - issuer:       OIDC issuer URL from Fulcio extension 1.3.6.1.4.1.57264.1.1
+   *                   or .1.8 (e.g., "https://accounts.google.com",
+   *                   "https://token.actions.githubusercontent.com").
+   *
+   * IMPORTANT: this is the cert's CLAIMED identity. Verifying the claim
+   * against Rekor is Level 4 work (queued). Operators may surface this for
+   * informational purposes (e.g., "publisher claims to be <subject> via
+   * <issuer>") but MUST NOT treat it as authenticated by extraction alone.
+   */
+  signature_identity?: {
+    subject: string;
+    subject_type: "email" | "uri" | "other";
+    issuer?: string;
+  };
   publisher_verified?: boolean;
   embedding_truncated?: boolean;
 }

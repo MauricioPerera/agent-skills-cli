@@ -135,8 +135,20 @@ export { runInit, printInitResult } from "./commands/init.js";
 export type { InitOptions, InitResult } from "./commands/init.js";
 
 // Signature verification (v0.10.0+, used internally by sync)
-export { verifyGitHubTag, enforceVerification } from "./lib/signature.js";
-export type { SignatureStatus, SignatureVerification } from "./lib/signature.js";
+export {
+  verifyGitHubTag,
+  enforceVerification,
+  detectSignatureMethod,
+} from "./lib/signature.js";
+export type {
+  SignatureStatus,
+  SignatureMethod,
+  SignatureVerification,
+} from "./lib/signature.js";
+
+// CMS / Sigstore identity extraction (v0.16.0+)
+export { extractSigstoreIdentity } from "./lib/cms.js";
+export type { SigstoreIdentity } from "./lib/cms.js";
 
 // Update command (v0.11.0+)
 export { runUpdate, printUpdateResult } from "./commands/update.js";

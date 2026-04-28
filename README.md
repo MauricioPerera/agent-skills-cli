@@ -642,8 +642,9 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.13.2 | shipped | Docs alignment patch: stale install/version refs across READMEs, init scaffolded CI workflow now pins v0.13.1, BENCHMARK.md updated. Plus a hotfix for a CI type-check break introduced in v0.13.1 |
 | v0.13.3 | shipped | + `gc_protected` counter in update results (visibility into multi-sub GC); narrowed `Subscription.source_type` from `"git" \| "url"` to `"git"`. 10/10 review issues fixed |
 | v0.14.0 | shipped | + Sigstore signature **detection** (structural via PEM header — `gpg` vs `sigstore` / `gitsign`). Full Rekor inclusion-proof verification (Level 4 enforcement) queued. Cross-impl parity (TS + Python) maintained in CI |
-| **v0.15.0** | **shipped** | + SSH-tag detection (`-----BEGIN SSH SIGNATURE-----` → `"ssh"`) — fixes a v0.14 oversight (cosign and many modern projects use `git config gpg.format ssh`). Spec patch v0.3.2: documents the **Sigstore-on-host trap** (Fulcio certs expire ~10 min; a `bad_cert` verdict on a `"sigstore"`-method tag is *ambiguous*, not equivalent to forged). Identity extraction + Rekor verification still queued for v0.16+ |
-| v0.16.0 | planned | Sigstore identity extraction (parse CMS, surface OIDC subject from Fulcio cert SAN) and/or Rekor inclusion-proof verification — completes the Level 4 trust path |
+| v0.15.0 | shipped | + SSH-tag detection (`-----BEGIN SSH SIGNATURE-----` → `"ssh"`) — fixes a v0.14 oversight. Spec patch v0.3.2: documents the **Sigstore-on-host trap** |
+| **v0.16.0** | **shipped** | + Sigstore identity extraction: hand-rolled CMS/ASN.1 walker pulls the OIDC subject from the Fulcio cert's SAN and the issuer from extension `1.3.6.1.4.1.57264.1.1` (`/.1.8`). Surfaced as `provenance.signature_identity = { subject, subject_type, issuer }`. Zero new deps (uses Node's built-in `crypto.X509Certificate` for the cert object). Cross-impl parity validated against the real `sigstore/gitsign@v0.14.0` payload via dedicated `sigstore-identity-parity` e2e job. Spec patch v0.3.3 |
+| v0.17.0+ | planned | Rekor inclusion-proof verification (real Level 4): Merkle math + Fulcio root validation — turns the *claimed* identity into an *authenticated* identity |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
 ## Continuous validation

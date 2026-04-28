@@ -378,3 +378,112 @@ describe("verifyGitHubTag — signature method propagated to result", () => {
     expect(result.reason).toBe("unknown_key");
   });
 });
+
+// ────────────────────────────────────────────────────────────────────
+// verifyGitHubTag — Sigstore identity extraction (v0.16.0+)
+// ────────────────────────────────────────────────────────────────────
+describe("verifyGitHubTag — Sigstore identity propagated to result", () => {
+  const mockFetch = (handler: (url: string) => Response): typeof fetch =>
+    (async (url: string | URL | Request) => handler(url.toString())) as unknown as typeof fetch;
+  const okJson = (body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  // Use the real sigstore/gitsign@v0.14.0 CMS payload as the fixture so the
+  // mocked GitHub response reflects an actual Fulcio-issued cert. This proves
+  // the wire (verifyGitHubTag → CMS walker → identity field) end-to-end.
+  const loadGitsignVerification = async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const { dirname, resolve } = await import("node:path");
+    const here = dirname(fileURLToPath(import.meta.url));
+    return JSON.parse(
+      readFileSync(resolve(here, "../fixtures/gitsign-v0.14.0-verification.json"), "utf8"),
+    ) as { signature: string; payload: string; reason: string; verified: boolean };
+  };
+
+  it("populates result.identity for sigstore-method tags (real gitsign payload)", async () => {
+    const fixture = await loadGitsignVerification();
+    const fetchFn = mockFetch((u) => {
+      if (u.includes("/git/refs/tags/")) {
+        return okJson({ ref: "refs/tags/v0.14.0", object: { sha: "tag-sha", type: "tag" } });
+      }
+      if (u.includes("/git/tags/tag-sha")) {
+        return okJson({
+          tag: "v0.14.0",
+          tagger: { name: "Billy Lynch", email: "billy@chainguard.dev" },
+          verification: {
+            // Use status as actually returned by GitHub for this tag —
+            // bad_cert is the canonical "Sigstore-on-host trap" case
+            // (signature is real, Fulcio cert has expired since signing).
+            verified: false,
+            reason: "bad_cert",
+            signature: fixture.signature,
+            payload: fixture.payload,
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await verifyGitHubTag("github.com/sigstore/gitsign", "v0.14.0", fetchFn);
+    expect(result.status).toBe("invalid");
+    expect(result.method).toBe("sigstore");
+    expect(result.identity).toBeDefined();
+    expect(result.identity!.subject).toBe("billy@chainguard.dev");
+    expect(result.identity!.subject_type).toBe("email");
+    expect(result.identity!.issuer).toBe("https://accounts.google.com");
+  });
+
+  it("does NOT populate identity for gpg-method tags", async () => {
+    const fetchFn = mockFetch((u) => {
+      if (u.includes("/git/refs/tags/")) {
+        return okJson({ ref: "refs/tags/v1.0.0", object: { sha: "tag-sha", type: "tag" } });
+      }
+      if (u.includes("/git/tags/tag-sha")) {
+        return okJson({
+          tag: "v1.0.0",
+          tagger: { email: "alice@example.com" },
+          verification: {
+            verified: true,
+            reason: "valid",
+            signature: "-----BEGIN PGP SIGNATURE-----\niQ...\n-----END PGP SIGNATURE-----",
+            payload: "object ...",
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await verifyGitHubTag("github.com/me/pack", "v1.0.0", fetchFn);
+    expect(result.method).toBe("gpg");
+    expect(result.identity).toBeUndefined();
+  });
+
+  it("does NOT populate identity for ssh-method tags", async () => {
+    const fetchFn = mockFetch((u) => {
+      if (u.includes("/git/refs/tags/")) {
+        return okJson({ ref: "refs/tags/v1.0.0", object: { sha: "tag-sha", type: "tag" } });
+      }
+      if (u.includes("/git/tags/tag-sha")) {
+        return okJson({
+          tag: "v1.0.0",
+          tagger: { email: "bob@example.com" },
+          verification: {
+            verified: true,
+            reason: "valid",
+            signature: "-----BEGIN SSH SIGNATURE-----\nU1NIU0lH...\n-----END SSH SIGNATURE-----",
+            payload: "object ...",
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await verifyGitHubTag("github.com/me/pack", "v1.0.0", fetchFn);
+    expect(result.method).toBe("ssh");
+    expect(result.identity).toBeUndefined();
+  });
+});

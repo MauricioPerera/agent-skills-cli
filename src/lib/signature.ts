@@ -25,6 +25,7 @@
 //      status !== "valid". Default off so existing setups keep working.
 
 import { CliError, EXIT } from "./errors.js";
+import { extractSigstoreIdentity, type SigstoreIdentity } from "./cms.js";
 
 /**
  * Result of a single tag's signature verification.
@@ -76,6 +77,16 @@ export interface SignatureVerification {
   signed_by?: string;
   /** Detected signing method when a payload is present. v0.14.0+. */
   method?: SignatureMethod;
+  /**
+   * Sigstore identity claim extracted from the CMS payload (v0.16.0+).
+   * Populated only when method === "sigstore" and CMS parsing succeeds.
+   *
+   * IMPORTANT: this is the cert's *claimed* identity, NOT a verified one.
+   * Verifying the claim against Rekor is Level 4 work and ships separately.
+   * Operators may surface this to users (e.g., "publisher claims to be
+   * <subject> via <issuer>") but MUST NOT treat it as authenticated.
+   */
+  identity?: SigstoreIdentity;
 }
 
 /**
@@ -215,6 +226,11 @@ export const verifyGitHubTag = async (
   // Detect signing method from the payload (v0.14.0+). Undefined when no
   // payload is present (i.e., unsigned tags) or the format is unrecognised.
   const method = detectSignatureMethod(verification.signature);
+  // For Sigstore-method tags, attempt to extract the OIDC identity claim
+  // from the CMS payload (v0.16.0+). Cheap (a few hundred bytes of ASN.1
+  // walking + Node's built-in cert parser); never blocks on a network call.
+  const identity =
+    method === "sigstore" ? extractSigstoreIdentity(verification.signature) : undefined;
 
   if (verification.verified === true) {
     return {
@@ -222,6 +238,7 @@ export const verifyGitHubTag = async (
       reason,
       ...(signedBy !== undefined ? { signed_by: signedBy } : {}),
       ...(method !== undefined ? { method } : {}),
+      ...(identity !== undefined ? { identity } : {}),
     };
   }
 
@@ -240,6 +257,7 @@ export const verifyGitHubTag = async (
     reason,
     ...(signedBy !== undefined ? { signed_by: signedBy } : {}),
     ...(method !== undefined ? { method } : {}),
+    ...(identity !== undefined ? { identity } : {}),
   };
 };
 

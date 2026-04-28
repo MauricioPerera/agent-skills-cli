@@ -207,9 +207,11 @@ jobs:
             valid|invalid|unsigned|unverified) ;;
             *) echo "::error::TS reported illegal signature.status: '$ts_sig_status'"; exit 1 ;;
           esac
-          # Method may be null (no payload, e.g. unverified/unsigned), gpg, or sigstore.
+          # Method may be null (no payload, e.g. unverified/unsigned), gpg, ssh,
+          # or sigstore. (ssh added in v0.15.0; identity field added v0.16.0 and
+          # is validated by the dedicated sigstore-identity-parity job below.)
           case "$ts_sig_method" in
-            null|gpg|sigstore) ;;
+            null|gpg|ssh|sigstore) ;;
             *) echo "::error::TS reported illegal signature.method: '$ts_sig_method'"; exit 1 ;;
           esac
           echo "✓ Both implementations agree on signature.status='$ts_sig_status' / method='$ts_sig_method' with identical reason."
@@ -225,6 +227,120 @@ jobs:
             /tmp/py-sync.json
             /tmp/py-result.json
           retention-days: 30
+
+  sigstore-identity-parity:
+    # Continuously validate that TS cms.ts and Python bank.py produce the
+    # same Sigstore identity claim from the same CMS payload. We hit a known
+    # real Sigstore-signed tag (sigstore/gitsign@v0.14.0) so the CMS walker
+    # exercises an actual Fulcio cert in CI on every push, not just unit
+    # fixtures. Catches drift between the two implementations' ASN.1 walkers.
+    #
+    # We deliberately use a tag whose Fulcio cert has expired — that's the
+    # canonical "Sigstore-on-host trap" case (SPEC §5.1 v0.3.2). It still has
+    # a valid identity claim; only the host's verdict is unreliable.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout TS CLI
+        uses: actions/checkout@v4
+        with:
+          path: cli
+
+      - name: Checkout Python proof (sister repo)
+        uses: actions/checkout@v4
+        with:
+          repository: MauricioPerera/agent-skills-py-proof
+          path: pyproof
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build TS CLI
+        working-directory: cli
+        run: npm ci && npm run build
+
+      - name: Install Python proof deps
+        working-directory: pyproof
+        run: pip install pyyaml requests
+
+      - name: Run TS extractor against sigstore/gitsign@v0.14.0 fixture
+        run: |
+          # Use the committed fixture (no live API call needed — keeps the
+          # check deterministic and decoupled from GitHub API state).
+          node --input-type=module -e "
+            import { readFileSync } from 'node:fs';
+            import { extractSigstoreIdentity } from './cli/dist/index.js';
+            const v = JSON.parse(readFileSync('cli/tests/fixtures/gitsign-v0.14.0-verification.json', 'utf8'));
+            const id = extractSigstoreIdentity(v.signature);
+            console.log(JSON.stringify(id, null, 2));
+          " > /tmp/ts-identity.json
+          cat /tmp/ts-identity.json
+
+      - name: Run Python extractor against same fixture
+        run: |
+          python -c "
+          import json, sys
+          sys.path.insert(0, 'pyproof')
+          from bank import extract_sigstore_identity
+          v = json.load(open('cli/tests/fixtures/gitsign-v0.14.0-verification.json'))
+          print(json.dumps(extract_sigstore_identity(v['signature']), indent=2, sort_keys=True))
+          " > /tmp/py-identity.json
+          cat /tmp/py-identity.json
+
+      - name: Compare extracted identities (PARITY CHECK)
+        run: |
+          # The two implementations walk independent ASN.1 parsers but MUST
+          # produce identical identity claims from the same CMS bytes.
+          ts_subject=$(jq -r '.subject' /tmp/ts-identity.json)
+          ts_subject_type=$(jq -r '.subject_type' /tmp/ts-identity.json)
+          ts_issuer=$(jq -r '.issuer // "null"' /tmp/ts-identity.json)
+          py_subject=$(jq -r '.subject' /tmp/py-identity.json)
+          py_subject_type=$(jq -r '.subject_type' /tmp/py-identity.json)
+          py_issuer=$(jq -r '.issuer // "null"' /tmp/py-identity.json)
+
+          echo ""
+          echo "=== Sigstore identity parity (sigstore/gitsign@v0.14.0) ==="
+          echo "                TS                              PY"
+          echo "subject         $ts_subject       $py_subject"
+          echo "subject_type    $ts_subject_type                          $py_subject_type"
+          echo "issuer          $ts_issuer    $py_issuer"
+          echo ""
+
+          fail=0
+          if [ "$ts_subject" != "$py_subject" ]; then
+            echo "::error::identity.subject mismatch: TS='$ts_subject' PY='$py_subject'"
+            fail=1
+          fi
+          if [ "$ts_subject_type" != "$py_subject_type" ]; then
+            echo "::error::identity.subject_type mismatch: TS='$ts_subject_type' PY='$py_subject_type'"
+            fail=1
+          fi
+          if [ "$ts_issuer" != "$py_issuer" ]; then
+            echo "::error::identity.issuer mismatch: TS='$ts_issuer' PY='$py_issuer'. The Fulcio extension OID parser has drifted between implementations."
+            fail=1
+          fi
+          if [ $fail -ne 0 ]; then exit 1; fi
+
+          # Sanity-check the extracted values match the published reality of
+          # sigstore/gitsign@v0.14.0 (Billy Lynch, signed via Google OAuth).
+          # If either of these change, the fixture has been replaced or the
+          # walkers regressed — either way, investigate before merging.
+          if [ "$ts_subject" != "billy@chainguard.dev" ]; then
+            echo "::error::Extracted subject doesn't match the published reality of sigstore/gitsign@v0.14.0. Either the fixture changed or both walkers have a matching bug."
+            exit 1
+          fi
+          if [ "$ts_issuer" != "https://accounts.google.com" ]; then
+            echo "::error::Extracted issuer doesn't match the published reality. Investigate."
+            exit 1
+          fi
+          echo "✓ TS and Python implementations produce identical identity extraction from real Sigstore CMS payload."
 
   author-roundtrip:
     # init → publish (check-only) → resolve a scaffolded skill.
