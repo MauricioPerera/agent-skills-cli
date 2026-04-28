@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileBank, type IndexedSkill } from "../../src/lib/bank.js";
+import { FileBank, type AuditEntry, type IndexedSkill } from "../../src/lib/bank.js";
 import { createStubEmbedder } from "../../src/lib/embed.js";
 
 let tmpDir: string;
