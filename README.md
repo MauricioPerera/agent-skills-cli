@@ -13,6 +13,23 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
+**v0.10.0** — signed-tag verification at sync time. Closes the SECURITY.md threat model item that's been documented since v0.1: an attacker who compromises an upstream account or the host's tag-resolution path can't move a `v1.0.0` tag to point at malicious code without also forging a GPG-verified signature on the tag.
+
+Two-tier enforcement:
+
+- **Always observe**: every sync calls GitHub's verification API and records the result in `provenance.signature_status` (one of `valid` / `invalid` / `unsigned` / `unverified`). Free, zero opt-in.
+- **Optionally enforce**: pass `--verify-signature` (or set `verify_signature: true` on the subscription) and the sync **aborts** when status isn't `valid`.
+
+```bash
+$ agent-skills sync github.com/MauricioPerera/agent-skills-pack@v1.0.0 --verify-signature
+signature verification failed for github.com/MauricioPerera/agent-skills-pack@v1.0.0:
+status=unsigned (tagger: MauricioPerera <mauricio.perera@gmail.com>, reason: unsigned).
+Pass without --verify-signature to ingest unverified, or work with the publisher to
+sign their tag with 'git tag -s' and re-tag.
+```
+
+The author side already creates signed tags via `agent-skills publish --sign` (v0.8.0). Now the consumer side can require them.
+
 **v0.9.0** — `init` command. Scaffolds a single skill or an entire skill pack from embedded templates. The output is publish-ready on the first run:
 
 ```bash
@@ -536,8 +553,9 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.6.1 | shipped | + 4 code-review patches (docstring, pure-Node PATH scan, ENOENT discrimination, bounded-concurrency sync) |
 | v0.7.0 | shipped | + `bench` subcommand: reproducible top-K accuracy against a JSONL/JSON-array truth file. CI integration via JSON output + non-zero exit on any failure |
 | v0.8.0 | shipped | + `publish` command: validate skills/, generate skills-index.json (preserves hand-crafted summaries + curated ordering), optionally git-tag |
-| **v0.9.0** | **shipped** | + `init` command: scaffold a single skill or full pack from embedded templates. Output validates against the spec on first run. 271/271 tests |
-| v0.10.0 | planned | Per-tenant audit scoping (`--user <id>`); Sigstore signature verification |
+| v0.9.0 | shipped | + `init` command: scaffold a single skill or full pack from embedded templates. Output validates against the spec on first run |
+| **v0.10.0** | **shipped** | + signed-tag verification at sync time (always observe, optionally enforce via `--verify-signature`). Closes the SECURITY.md tag-tampering threat model. 289/289 tests |
+| v0.11.0 | planned | Per-tenant audit scoping (`--user <id>`) + spec v0.2 (formalize bench format, intent in audit, intent-conditional rerank pattern) |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
 ## Sister projects

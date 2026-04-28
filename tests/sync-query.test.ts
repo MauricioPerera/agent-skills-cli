@@ -136,7 +136,12 @@ describe("runSync — happy path with mocked fetch + stub embedder", () => {
     const skill = await bank.getSkill(`github.com/test/pack@${FAKE_SHA}/x`);
     expect(skill?.provenance.ref_resolved_to).toBe(FAKE_SHA);
     expect(skill?.provenance.source).toBe("github.com/test/pack");
-    expect(skill?.provenance.signature_status).toBe("unsigned");
+    // The mock fetch in this test doesn't supply a GitHub tag-verification
+    // response, so the verifier returns "unverified" — which is the correct
+    // status for "we couldn't determine signature state". v0.10.0+ behaviour;
+    // the old hardcoded "unsigned" was a lie. See signature.test.ts for full
+    // verification-status coverage.
+    expect(skill?.provenance.signature_status).toBe("unverified");
     expect(skill?.embedding_model).toBe(embedder.name);
     expect(skill?.embedding).toHaveLength(32);
   });
@@ -274,6 +279,155 @@ describe("runQuery — happy path", () => {
     await expect(
       runQuery({ intent: "  ", bank, embedder }),
     ).rejects.toThrow(/empty/);
+  });
+});
+
+// v0.10.0: signature verification integration.
+describe("runSync — signature verification (v0.10.0+)", () => {
+  const buildFetchWithSignedTag = (verified: boolean, reason: string) => {
+    return (async (url) => {
+      const u = url.toString();
+      // GitHub: ref → tag-object SHA
+      if (u.includes("/git/refs/tags/")) {
+        return new Response(
+          JSON.stringify({
+            ref: "refs/tags/v1.0.0",
+            object: { sha: "tag-obj-sha", type: "tag" },
+          }),
+          { status: 200 },
+        );
+      }
+      // GitHub: tag object with verification field
+      if (u.includes("/git/tags/tag-obj-sha")) {
+        return new Response(
+          JSON.stringify({
+            tag: "v1.0.0",
+            tagger: { name: "Alice", email: "alice@example.com" },
+            verification: {
+              verified,
+              reason,
+              signature: verified || reason !== "unsigned" ? "-----BEGIN PGP..." : null,
+              payload: verified || reason !== "unsigned" ? "object ..." : null,
+            },
+            // resolveRef expects this to be the COMMIT sha (SyncOptions uses sha for jsDelivr)
+            object: { sha: FAKE_SHA, type: "commit" },
+          }),
+          { status: 200 },
+        );
+      }
+      // resolveRef happy path: tag → commit sha
+      if (u.includes("api.github.com") && u.includes("/commits/")) {
+        return new Response(JSON.stringify({ sha: FAKE_SHA }), { status: 200 });
+      }
+      // skills-index.json
+      if (u.endsWith("/skills-index.json")) {
+        return new Response(
+          JSON.stringify({
+            schema_version: "0.1",
+            skills: [
+              { id: "alpha", version: "1.0.0", url: "https://cdn.example.com/alpha/SKILL.md" },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes("/alpha/SKILL.md")) {
+        return new Response(VALID_SKILL_MD("alpha", "alpha thing"), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+  };
+
+  it("records signature.status='valid' in the SyncResult when GitHub verifies the tag", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const embedder = createStubEmbedder(32);
+
+    const result = await runSync({
+      source: "github.com/test/pack@v1.0.0",
+      bank,
+      embedder,
+      fetchFn: buildFetchWithSignedTag(true, "valid"),
+    });
+
+    expect(result.signature?.status).toBe("valid");
+    expect(result.signature?.signed_by).toContain("Alice");
+    // The per-skill provenance also picks up the status.
+    const skill = await bank.getSkill(`github.com/test/pack@${FAKE_SHA}/alpha`);
+    expect(skill?.provenance.signature_status).toBe("valid");
+  });
+
+  it("records signature.status='unsigned' when the tag isn't signed (no enforcement)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const embedder = createStubEmbedder(32);
+
+    const result = await runSync({
+      source: "github.com/test/pack@v1.0.0",
+      bank,
+      embedder,
+      fetchFn: buildFetchWithSignedTag(false, "unsigned"),
+    });
+
+    expect(result.signature?.status).toBe("unsigned");
+    expect(result.signature_enforced).toBe(false);
+    // Skills still ingested when enforcement is off.
+    expect(result.synced).toBe(1);
+
+    const skill = await bank.getSkill(`github.com/test/pack@${FAKE_SHA}/alpha`);
+    expect(skill?.provenance.signature_status).toBe("unsigned");
+  });
+
+  it("ABORTS the sync with --verify-signature when the tag isn't signed", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const embedder = createStubEmbedder(32);
+
+    await expect(
+      runSync({
+        source: "github.com/test/pack@v1.0.0",
+        bank,
+        embedder,
+        fetchFn: buildFetchWithSignedTag(false, "unsigned"),
+        verifySignature: true,
+      }),
+    ).rejects.toThrow(/signature verification failed.*status=unsigned/i);
+
+    // Critical: nothing was ingested.
+    expect((await bank.listSkills()).length).toBe(0);
+  });
+
+  it("ABORTS the sync with --verify-signature on an invalid signature", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const embedder = createStubEmbedder(32);
+
+    await expect(
+      runSync({
+        source: "github.com/test/pack@v1.0.0",
+        bank,
+        embedder,
+        fetchFn: buildFetchWithSignedTag(false, "unknown_key"),
+        verifySignature: true,
+      }),
+    ).rejects.toThrow(/signature verification failed.*status=invalid/i);
+  });
+
+  it("succeeds with --verify-signature when the tag IS verified", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const embedder = createStubEmbedder(32);
+
+    const result = await runSync({
+      source: "github.com/test/pack@v1.0.0",
+      bank,
+      embedder,
+      fetchFn: buildFetchWithSignedTag(true, "valid"),
+      verifySignature: true,
+    });
+
+    expect(result.signature?.status).toBe("valid");
+    expect(result.signature_enforced).toBe(true);
+    expect(result.synced).toBe(1);
+
+    // Subscription persists the verify_signature flag for future syncs.
+    const subs = await bank.listSubscriptions();
+    expect(subs[0]?.verify_signature).toBe(true);
   });
 });
 

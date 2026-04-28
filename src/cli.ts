@@ -12,7 +12,7 @@ import { printBenchResult, runBench } from "./commands/bench.js";
 import { printPublishResult, runPublish } from "./commands/publish.js";
 import { printInitResult, runInit } from "./commands/init.js";
 
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -78,6 +78,9 @@ Flags (per command):
   --in <dir>            (init) Root directory. Default: . (cwd).
   --author <name>       (init) Inject as author.name in the skill template.
   --force               (init) Overwrite existing files instead of refusing.
+  --verify-signature    (sync) Refuse to ingest from an unsigned / unverified
+                        tag. v0.10.0+. Status is recorded in provenance even
+                        when this flag is off (always-observe).
 
 Embedding providers (v0.6.0+ — auto-detected from env, or set EMBEDDING_PROVIDER):
 
@@ -331,13 +334,26 @@ const main = async (): Promise<void> => {
     if (source === undefined) {
       throw new CliError(EXIT.USAGE, "sync: missing <repo>[@<ref>] argument");
     }
+    const verifySignature = args.flags.get("verify-signature") === true;
     const embedder = resolveEmbedderFromEnv({ provider: providerOverride });
-    const result = await runSync({ source, bank, embedder });
+    const result = await runSync({ source, bank, embedder, verifySignature });
     if (asJson) {
       process.stdout.write(JSON.stringify(result) + "\n");
     } else {
       process.stdout.write(`Synced ${result.source}\n`);
       process.stdout.write(`  ref: ${result.ref_requested} → ${result.ref_resolved}\n`);
+      if (result.signature) {
+        const glyph = result.signature.status === "valid"
+          ? "✓"
+          : result.signature.status === "invalid"
+            ? "✗"
+            : "·";
+        const enforced = result.signature_enforced ? " (enforced)" : "";
+        const by = result.signature.signed_by ? ` — ${result.signature.signed_by}` : "";
+        process.stdout.write(
+          `  signature: ${glyph} ${result.signature.status}${enforced} (${result.signature.reason})${by}\n`,
+        );
+      }
       process.stdout.write(`  total: ${result.total} | synced: ${result.synced} | invalid: ${result.invalid} | errored: ${result.errored}\n\n`);
       for (const r of result.skills) {
         const icon = r.status === "synced" ? "✓" : r.status === "invalid" ? "✗" : "!";

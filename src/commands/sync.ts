@@ -14,6 +14,12 @@ import { composeEmbeddingText } from "../lib/embed.js";
 import { CliError, EXIT } from "../lib/errors.js";
 import { parseSkillSource } from "../lib/parse-skill.js";
 import { validateSkill } from "../lib/validate.js";
+import {
+  enforceVerification,
+  verifyGitHubTag,
+  type SignatureStatus,
+  type SignatureVerification,
+} from "../lib/signature.js";
 
 export interface SyncOptions {
   /**
@@ -37,6 +43,15 @@ export interface SyncOptions {
    * there but doesn't hurt either.
    */
   concurrency?: number;
+  /**
+   * If true, require a verified-signed annotated tag at sync time. The sync
+   * aborts (CliError, exit 5) when the signature is missing, invalid, or the
+   * host doesn't expose verification.
+   *
+   * Default: false (signature status is recorded in provenance but not
+   * enforced). v0.10.0+.
+   */
+  verifySignature?: boolean;
 }
 
 export interface SyncSkillResult {
@@ -56,6 +71,14 @@ export interface SyncResult {
   synced: number;
   invalid: number;
   errored: number;
+  /**
+   * Signature verification result for the resolved tag (v0.10.0+).
+   * Always populated for github.com hosts even when --verify-signature is
+   * off. status="unverified" for non-GitHub hosts and raw-SHA refs.
+   */
+  signature?: SignatureVerification;
+  /** True iff --verify-signature was requested AND verification passed. */
+  signature_enforced?: boolean;
 }
 
 interface SkillsIndexEntry {
@@ -165,6 +188,14 @@ export const runSync = async (opts: SyncOptions): Promise<SyncResult> => {
   // 2. Resolve ref → commit hash
   const sha = await resolveRef(repo, refRequested, fetchImpl);
 
+  // 2.5. Verify the tag's signature (always observe; optionally enforce).
+  //      For non-GitHub hosts and raw-SHA refs the verifier returns
+  //      status="unverified" without making an API call.
+  const signature = await verifyGitHubTag(repo, refRequested, fetchImpl);
+  if (opts.verifySignature === true) {
+    enforceVerification(signature, repo, refRequested);
+  }
+
   // 3. Initialize bank metadata (idempotent; refuses model mismatch)
   await bank.initMeta({
     embedding_model: embedder.name,
@@ -215,6 +246,8 @@ export const runSync = async (opts: SyncOptions): Promise<SyncResult> => {
         embedder,
         fetchImpl,
         refRequested,
+        signatureStatus: signature.status,
+        signedBy: signature.signed_by,
       });
     }
   };
@@ -230,6 +263,7 @@ export const runSync = async (opts: SyncOptions): Promise<SyncResult> => {
     ref_resolved: sha,
     auto_update: false,
     last_synced: new Date().toISOString(),
+    ...(opts.verifySignature === true ? { verify_signature: true } : {}),
   };
   await bank.upsertSubscription(subscription);
 
@@ -242,6 +276,8 @@ export const runSync = async (opts: SyncOptions): Promise<SyncResult> => {
     synced: results.filter((r) => r.status === "synced").length,
     invalid: results.filter((r) => r.status === "invalid").length,
     errored: results.filter((r) => r.status === "error").length,
+    signature,
+    signature_enforced: opts.verifySignature === true && signature.status === "valid",
   };
 };
 
@@ -254,8 +290,10 @@ const syncSingleSkill = async (params: {
   embedder: EmbeddingProvider;
   fetchImpl: typeof fetch;
   refRequested: string;
+  signatureStatus: SignatureStatus;
+  signedBy?: string;
 }): Promise<SyncSkillResult> => {
-  const { entry, repo, sha, urlTemplate, bank, embedder, fetchImpl, refRequested } = params;
+  const { entry, repo, sha, urlTemplate, bank, embedder, fetchImpl, refRequested, signatureStatus, signedBy } = params;
 
   const url = entry.url
     ?? (urlTemplate
@@ -323,7 +361,8 @@ const syncSingleSkill = async (params: {
       ref_resolved_to: sha,
       ref_requested: refRequested,
       fetched_at: now,
-      signature_status: "unsigned", // signing layer is v0.4.0+
+      signature_status: signatureStatus,
+      ...(signedBy !== undefined ? { signed_by: signedBy } : {}),
     },
     embedding,
     embedding_model: embedder.name,

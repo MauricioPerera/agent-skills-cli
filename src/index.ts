@@ -133,3 +133,7 @@ export type {
 
 export { runInit, printInitResult } from "./commands/init.js";
 export type { InitOptions, InitResult } from "./commands/init.js";
+
+// Signature verification (v0.10.0+, used internally by sync)
+export { verifyGitHubTag, enforceVerification } from "./lib/signature.js";
+export type { SignatureStatus, SignatureVerification } from "./lib/signature.js";
