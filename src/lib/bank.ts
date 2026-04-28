@@ -95,6 +95,19 @@ export interface AuditEntry {
   skill_id: string;
   /** Optional: the natural-language intent that led to this skill (from query). */
   intent?: string;
+  /**
+   * Optional: tenant identifier for multi-tenant deployments (SPEC §4.5.1, v0.12.0+).
+   *
+   * When the bank is shared by multiple agents/users, set this on every
+   * exec to scope the audit log per tenant. Intent-conditional rerank
+   * filters past entries to only those matching the current query's
+   * tenant — Alice's heavy use of base64-encode never bleeds into Bob's
+   * retrieval boost.
+   *
+   * If unset (the default for single-user deployments), the audit log is
+   * treated as a single shared history and rerank uses every entry.
+   */
+  tenant?: string;
   /** Substituted args at call time. Sensitive values are redacted to "<redacted>". */
   args: Record<string, unknown>;
   /** Process exit code. 0 = success. */

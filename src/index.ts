@@ -145,3 +145,8 @@ export type {
   UpdateResult,
   UpdateSubscriptionResult,
 } from "./commands/update.js";
+
+// CLI argument helpers (v0.12.0+, used by the bin shim — exposed for
+// downstream tooling that wraps the CLI with the same flag conventions)
+export { parseArgv, parseRerankMode, parseTenantFlag } from "./lib/cli-args.js";
+export type { Argv } from "./lib/cli-args.js";

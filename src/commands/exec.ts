@@ -55,6 +55,12 @@ export interface ExecOptions {
   noAudit?: boolean;
   /** Optional: original natural-language intent (recorded in audit). */
   intent?: string;
+  /**
+   * Optional: tenant identifier (recorded in audit; v0.12.0+).
+   * Used by multi-tenant bank deployments to scope intent-conditional
+   * rerank per user. See SPEC §4.5.1.
+   */
+  tenant?: string;
 }
 
 export interface ExecResult {
@@ -224,6 +230,7 @@ export const runExec = async (opts: ExecOptions): Promise<ExecResult> => {
       stderr_bytes: Buffer.byteLength(result.stderr, "utf8"),
     };
     if (opts.intent !== undefined) entry.intent = opts.intent;
+    if (opts.tenant !== undefined) entry.tenant = opts.tenant;
     await opts.bank.appendAudit(entry);
   }
 

@@ -5,7 +5,7 @@
 // triggering process.exit() or sub-command dispatch.
 
 import { describe, expect, it } from "vitest";
-import { parseArgv, parseRerankMode } from "../../src/lib/cli-args.js";
+import { parseArgv, parseRerankMode, parseTenantFlag } from "../../src/lib/cli-args.js";
 import { CliError, EXIT } from "../../src/lib/errors.js";
 
 // ────────────────────────────────────────────────────────────────────
@@ -238,6 +238,87 @@ describe("parseRerankMode — error path", () => {
     // default behaviour, not an error — debatable, but consistent with how
     // boolean-vs-string flags work elsewhere in the CLI.
     expect(parseRerankMode(argvOf(["rerank-mode", true]))).toBe("intent-conditional");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// parseTenantFlag (v0.12.0+, SPEC §4.5.1)
+// ────────────────────────────────────────────────────────────────────
+
+describe("parseTenantFlag — happy paths", () => {
+  it("returns undefined when --tenant is absent", () => {
+    expect(parseTenantFlag(argvOf())).toBeUndefined();
+  });
+
+  it("accepts a normal alphanumeric tenant", () => {
+    expect(parseTenantFlag(argvOf(["tenant", "alice"]))).toBe("alice");
+  });
+
+  it("accepts dots, dashes, and underscores", () => {
+    expect(parseTenantFlag(argvOf(["tenant", "team-1.alpha_v2"]))).toBe("team-1.alpha_v2");
+  });
+
+  it("accepts a 64-char tenant (boundary)", () => {
+    const id = "a".repeat(64);
+    expect(parseTenantFlag(argvOf(["tenant", id]))).toBe(id);
+  });
+
+  it("accepts a single-char tenant", () => {
+    expect(parseTenantFlag(argvOf(["tenant", "a"]))).toBe("a");
+  });
+});
+
+describe("parseTenantFlag — rejects bad input", () => {
+  it("rejects bare --tenant (boolean form, no value)", () => {
+    expect(() => parseTenantFlag(argvOf(["tenant", true]))).toThrow(
+      /requires a non-empty string value/,
+    );
+  });
+
+  it("rejects empty string --tenant=", () => {
+    expect(() => parseTenantFlag(argvOf(["tenant", ""]))).toThrow(
+      /requires a non-empty string value/,
+    );
+  });
+
+  it("rejects 65-char tenant (over the boundary)", () => {
+    expect(() => parseTenantFlag(argvOf(["tenant", "a".repeat(65)]))).toThrow(
+      /must match/,
+    );
+  });
+
+  it("rejects spaces", () => {
+    expect(() => parseTenantFlag(argvOf(["tenant", "alice bob"]))).toThrow(
+      /must match/,
+    );
+  });
+
+  it("rejects path traversal attempts", () => {
+    expect(() => parseTenantFlag(argvOf(["tenant", "../etc/passwd"]))).toThrow(
+      /must match/,
+    );
+  });
+
+  it("rejects shell metacharacters", () => {
+    for (const evil of ["alice;rm", "alice|wc", "alice$x", "alice`pwd`"]) {
+      expect(() => parseTenantFlag(argvOf(["tenant", evil]))).toThrow(/must match/);
+    }
+  });
+
+  it("rejects slashes and forward slashes", () => {
+    expect(() => parseTenantFlag(argvOf(["tenant", "a/b"]))).toThrow(/must match/);
+    expect(() => parseTenantFlag(argvOf(["tenant", "a\\b"]))).toThrow(/must match/);
+  });
+
+  it("throws CliError(USAGE), not a generic error", () => {
+    let err: unknown = null;
+    try {
+      parseTenantFlag(argvOf(["tenant", "bad/value"]));
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(EXIT.USAGE);
   });
 });
 

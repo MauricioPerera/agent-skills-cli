@@ -12,9 +12,9 @@ import { printBenchResult, runBench } from "./commands/bench.js";
 import { printPublishResult, runPublish } from "./commands/publish.js";
 import { printInitResult, runInit } from "./commands/init.js";
 import { printUpdateResult, runUpdate } from "./commands/update.js";
-import { parseArgv, parseRerankMode } from "./lib/cli-args.js";
+import { parseArgv, parseRerankMode, parseTenantFlag } from "./lib/cli-args.js";
 
-const VERSION = "0.11.0";
+const VERSION = "0.12.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -85,6 +85,12 @@ Flags (per command):
   --verify-signature    (sync) Refuse to ingest from an unsigned / unverified
                         tag. v0.10.0+. Status is recorded in provenance even
                         when this flag is off (always-observe).
+  --tenant <id>         (exec, query, bench) Multi-tenant audit + rerank
+                        scoping. v0.12.0+, SPEC §4.5.1. Audit entries record
+                        the tenant; intent-conditional rerank filters past
+                        entries by tenant so one user's history doesn't
+                        bleed into another's retrieval. Format:
+                        ^[a-zA-Z0-9._-]{1,64}$.
 
 Embedding providers (v0.6.0+ — auto-detected from env, or set EMBEDDING_PROVIDER):
 
@@ -364,6 +370,7 @@ const main = async (): Promise<void> => {
     const k = typeof kFlag === "string" ? Number(kFlag) : undefined;
     const noFilter = args.flags.get("no-filter") === true;
     const rerankMode = parseRerankMode(args);
+    const tenant = parseTenantFlag(args);
     const embedder = resolveEmbedderFromEnv({ provider: providerOverride });
     const result = await runQuery({
       intent,
@@ -372,6 +379,7 @@ const main = async (): Promise<void> => {
       embedder,
       rerankMode,
       filterApplicable: !noFilter,
+      ...(tenant !== undefined ? { tenant } : {}),
     });
     printQueryResult(result, asJson);
     process.exit(EXIT.OK);
@@ -386,6 +394,7 @@ const main = async (): Promise<void> => {
     const k = typeof kFlag === "string" ? Number(kFlag) : undefined;
     const noFilter = args.flags.get("no-filter") === true;
     const rerankMode = parseRerankMode(args);
+    const tenant = parseTenantFlag(args);
     const embedder = resolveEmbedderFromEnv({ provider: providerOverride });
     const result = await runBench({
       truthFile,
@@ -394,6 +403,7 @@ const main = async (): Promise<void> => {
       k,
       rerankMode,
       filterApplicable: !noFilter,
+      ...(tenant !== undefined ? { tenant } : {}),
     });
     printBenchResult(result, asJson);
     // Non-zero exit when any failure is present, so CI treats <100% top-1 as a regression.
@@ -430,6 +440,7 @@ const main = async (): Promise<void> => {
     const timeoutSec = typeof timeoutFlag === "string" ? Number(timeoutFlag) : undefined;
     const intentFlag = args.flags.get("intent");
     const intent = typeof intentFlag === "string" ? intentFlag : undefined;
+    const tenant = parseTenantFlag(args);
 
     const result = await runExec({
       bank,
@@ -439,6 +450,7 @@ const main = async (): Promise<void> => {
       timeoutSec,
       noAudit,
       intent,
+      ...(tenant !== undefined ? { tenant } : {}),
     });
 
     if (dryRun) {

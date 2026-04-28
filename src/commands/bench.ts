@@ -46,6 +46,11 @@ export interface BenchOptions {
   rerankMode?: RerankMode;
   /** Whether applicable_when filtering is on. Default: true. */
   filterApplicable?: boolean;
+  /**
+   * Optional: scope intent-conditional rerank to past audits with this
+   * tenant (v0.12.0+). Pass-through to runQuery. See SPEC §4.5.1.
+   */
+  tenant?: string;
 }
 
 export interface BenchQueryResult {
@@ -240,6 +245,7 @@ export const runBench = async (opts: BenchOptions): Promise<BenchResult> => {
       embedder: opts.embedder,
       rerankMode,
       filterApplicable,
+      ...(opts.tenant !== undefined ? { tenant: opts.tenant } : {}),
     });
 
     const hits = result.hits;

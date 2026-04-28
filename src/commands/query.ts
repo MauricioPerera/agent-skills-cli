@@ -57,6 +57,15 @@ export interface QueryOptions {
    * mode = "none". Internal code should prefer `rerankMode`.
    */
   rerank?: boolean;
+  /**
+   * Optional: scope intent-conditional rerank to past audits with this
+   * tenant (v0.12.0+, SPEC §4.5.1). When set, only audit entries whose
+   * `tenant` field equals this value contribute to the boost — multi-
+   * tenant deployments avoid bleeding one user's history into another's
+   * retrieval. When unset, all audit entries participate (single-user
+   * default behaviour, unchanged from v0.11).
+   */
+  tenant?: string;
 }
 
 export interface QueryHit {
@@ -180,7 +189,13 @@ export const runQuery = async (opts: QueryOptions): Promise<QueryResult> => {
       recency_boost: 0,
     }));
   } else if (mode === "global") {
-    const auditEntries = await opts.bank.listAudit({});
+    const allAudit = await opts.bank.listAudit({});
+    // Tenant filter: when --tenant is set, only this tenant's audit
+    // history contributes to the global boost. Same isolation guarantee
+    // as the intent-conditional path.
+    const auditEntries = opts.tenant !== undefined
+      ? allAudit.filter((e) => e.tenant === opts.tenant)
+      : allAudit;
     const usageStats = aggregateUsage(auditEntries);
     const reranked = rerank(
       applicable.map(({ skill, score }) => ({ skill_id: skill.identity, cosine: score })),
@@ -259,8 +274,14 @@ const runIntentConditional = async (
   usage_boost: number;
   recency_boost: number;
 }>> => {
-  const auditEntries = await opts.bank.listAudit({});
-  const audits = auditEntries.filter((e): e is AuditEntry & { intent: string } =>
+  const allAudit = await opts.bank.listAudit({});
+  // Tenant filter (SPEC §4.5.1, v0.12.0+): when --tenant is set, only past
+  // audits from this tenant participate. Otherwise (single-user default),
+  // every entry participates exactly as in v0.11.
+  const tenantScoped = opts.tenant !== undefined
+    ? allAudit.filter((e) => e.tenant === opts.tenant)
+    : allAudit;
+  const audits = tenantScoped.filter((e): e is AuditEntry & { intent: string } =>
     typeof e.intent === "string" && e.intent.length > 0,
   );
 

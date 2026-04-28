@@ -80,3 +80,34 @@ export const parseRerankMode = (
   if (args.flags.get("no-rerank") === true) mode = "none";
   return mode;
 };
+
+/**
+ * Parse the --tenant flag (v0.12.0+, SPEC §4.5.1). Returns the validated
+ * tenant id or undefined if the flag is absent.
+ *
+ * Constraints:
+ *   - Required value (boolean `true` form is rejected — tenant ids matter).
+ *   - 1–64 chars, [a-zA-Z0-9._-] only. The narrow charset keeps audit-log
+ *     JSON safe regardless of how a bank stores or queries it, and
+ *     forecloses path-injection / metacharacter mischief if the id is ever
+ *     reused as a filename or query parameter.
+ *
+ * Used by exec, query, and bench dispatches.
+ */
+export const parseTenantFlag = (args: Argv): string | undefined => {
+  const flag = args.flags.get("tenant");
+  if (flag === undefined) return undefined;
+  if (flag === true || flag === "") {
+    throw new CliError(
+      EXIT.USAGE,
+      "--tenant requires a non-empty string value (e.g., --tenant alice)",
+    );
+  }
+  if (typeof flag !== "string" || !/^[a-zA-Z0-9._-]{1,64}$/.test(flag)) {
+    throw new CliError(
+      EXIT.USAGE,
+      "--tenant must match ^[a-zA-Z0-9._-]{1,64}$ (letters, digits, dot, dash, underscore; 1-64 chars)",
+    );
+  }
+  return flag;
+};

@@ -15,7 +15,20 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
-**v0.11.0+ + spec v0.2** — the spec is now specified, not just documented: a [510-line Python proof-of-concept](https://github.com/MauricioPerera/agent-skills-py-proof) reproduces this CLI's retrieval behaviour bit-for-bit (34/35 top-1, 35/35 top-3, mean margin +0.175 — identical to 4 decimals on the canonical benchmark). If you're writing a third implementation, that file is the shortest path to the spec.
+**v0.12.0** — per-tenant audit scoping. Multi-tenant skill-bank deployments (shared CI bots, team setups, multi-user agents) get isolation: Alice's heavy use of `base64-encode` no longer bleeds into Bob's intent-conditional rerank.
+
+```bash
+$ agent-skills exec base64-encode --args '{"value":"x"}' --tenant alice  # records tenant
+$ agent-skills query "encode something" --tenant bob                     # only Bob's history boosts
+```
+
+The `--tenant` flag (validated as `^[a-zA-Z0-9._-]{1,64}$`) is supported on `exec`, `query`, and `bench`. Per SPEC §4.5.1: when set, the audit entry records the tenant; intent-conditional rerank filters past audits by tenant before computing the boost. When unset (the default for single-user deployments), behaviour is identical to v0.11.
+
+Backwards-compatible: existing audit logs (no `tenant` field) work unchanged. The field is optional and additive.
+
+---
+
+**v0.11.0+ + spec v0.2** — the spec is specified, not just documented: a [510-line Python proof-of-concept](https://github.com/MauricioPerera/agent-skills-py-proof) reproduces this CLI's retrieval behaviour bit-for-bit (34/35 top-1, 35/35 top-3, mean margin +0.175 — identical to 4 decimals on the canonical benchmark). The cross-implementation parity is continuously validated by [`e2e.yml`](https://github.com/MauricioPerera/agent-skills-cli/actions/workflows/e2e.yml) on every push and weekly cron.
 
 ---
 
@@ -622,8 +635,9 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.8.0 | shipped | + `publish` command: validate skills/, generate skills-index.json (preserves hand-crafted summaries + curated ordering), optionally git-tag |
 | v0.9.0 | shipped | + `init` command: scaffold a single skill or full pack from embedded templates. Output validates against the spec on first run |
 | v0.10.0 | shipped | + signed-tag verification at sync time. Closes the SECURITY.md tag-tampering threat model |
-| **v0.11.0** | **shipped** | + `update` command: re-resolve subscribed refs, re-sync only on movement, GC orphan files from old SHAs, per-skill diff. 297/297 tests |
-| v0.12.0 | planned | Per-tenant audit scoping (`--user <id>`) + spec v0.2 (formalize bench format, intent in audit, intent-conditional rerank pattern) |
+| v0.11.0 | shipped | + `update` command: re-resolve subscribed refs, re-sync only on movement, GC orphan files from old SHAs, per-skill diff |
+| **v0.12.0** | **shipped** | + per-tenant audit scoping (`--tenant <id>` on exec/query/bench); intent-conditional rerank filters by tenant; SPEC §4.5.1; 349/349 tests |
+| v0.13.0 | planned | Sigstore + Rekor (Level 4) — keyless signing with public transparency log |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
 ## Continuous validation
