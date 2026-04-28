@@ -121,36 +121,46 @@ jobs:
 
       - name: Compare retrieval outcomes (PARITY CHECK)
         run: |
-          # Extract the comparable fields. We do NOT compare per-query scores
-          # below 4 decimal places — Ollama's float output is stable but small
-          # noise is plausible. We compare the integer counts (top1, top3, topK)
-          # and the rounded mean stats; a mismatch there is a real divergence.
+          # The two implementations serialise floats with different precision:
+          # TS keeps full f64 (e.g., 0.5244169438802997), Python rounds to 4
+          # decimals (0.5244). Both produce identical computed values; only the
+          # string representation differs. So we compare integers exactly and
+          # floats rounded to 4 decimals.
           ts_top1=$(jq -r '.top1' /tmp/ts-result.json)
           ts_top3=$(jq -r '.top3' /tmp/ts-result.json)
-          ts_mean=$(jq -r '.mean_top1_score' /tmp/ts-result.json)
-          ts_margin=$(jq -r '.mean_margin' /tmp/ts-result.json)
+          ts_topK=$(jq -r '.topK' /tmp/ts-result.json)
           py_top1=$(jq -r '.top1' /tmp/py-result.json)
           py_top3=$(jq -r '.top3' /tmp/py-result.json)
-          py_mean=$(jq -r '.mean_top1_score' /tmp/py-result.json)
-          py_margin=$(jq -r '.mean_margin' /tmp/py-result.json)
+          py_topK=$(jq -r '.topK' /tmp/py-result.json)
+
+          # Round floats to 4 decimals before comparison.
+          ts_mean=$(printf "%.4f" "$(jq -r '.mean_top1_score' /tmp/ts-result.json)")
+          ts_margin=$(printf "%.4f" "$(jq -r '.mean_margin' /tmp/ts-result.json)")
+          py_mean=$(printf "%.4f" "$(jq -r '.mean_top1_score' /tmp/py-result.json)")
+          py_margin=$(printf "%.4f" "$(jq -r '.mean_margin' /tmp/py-result.json)")
 
           echo ""
           echo "=== Cross-implementation parity ==="
-          echo "TS:  top1=$ts_top1  top3=$ts_top3  mean=$ts_mean  margin=$ts_margin"
-          echo "PY:  top1=$py_top1  top3=$py_top3  mean=$py_mean  margin=$py_margin"
+          echo "                    TS         PY"
+          echo "top1                $ts_top1         $py_top1"
+          echo "top3                $ts_top3         $py_top3"
+          echo "topK                $ts_topK         $py_topK"
+          echo "mean_top1_score     $ts_mean   $py_mean"
+          echo "mean_margin         $ts_margin   $py_margin"
           echo ""
 
           fail=0
-          if [ "$ts_top1" != "$py_top1" ]; then echo "::error::top1 mismatch: TS=$ts_top1 PY=$py_top1"; fail=1; fi
-          if [ "$ts_top3" != "$py_top3" ]; then echo "::error::top3 mismatch: TS=$ts_top3 PY=$py_top3"; fail=1; fi
-          if [ "$ts_mean" != "$py_mean" ]; then echo "::error::mean_top1_score mismatch: TS=$ts_mean PY=$py_mean"; fail=1; fi
-          if [ "$ts_margin" != "$py_margin" ]; then echo "::error::mean_margin mismatch: TS=$ts_margin PY=$py_margin"; fail=1; fi
+          if [ "$ts_top1"   != "$py_top1"   ]; then echo "::error::top1 mismatch: TS=$ts_top1 PY=$py_top1"; fail=1; fi
+          if [ "$ts_top3"   != "$py_top3"   ]; then echo "::error::top3 mismatch: TS=$ts_top3 PY=$py_top3"; fail=1; fi
+          if [ "$ts_topK"   != "$py_topK"   ]; then echo "::error::topK mismatch: TS=$ts_topK PY=$py_topK"; fail=1; fi
+          if [ "$ts_mean"   != "$py_mean"   ]; then echo "::error::mean_top1_score mismatch (4dp): TS=$ts_mean PY=$py_mean"; fail=1; fi
+          if [ "$ts_margin" != "$py_margin" ]; then echo "::error::mean_margin mismatch (4dp): TS=$ts_margin PY=$py_margin"; fail=1; fi
 
           if [ $fail -ne 0 ]; then
             echo "::error::Cross-implementation parity broken. Either a sister repo changed in a way that diverges retrieval, or the spec needs an additional clarification. Investigate before merging."
             exit 1
           fi
-          echo "✓ TS and Python implementations produce identical retrieval results."
+          echo "✓ TS and Python implementations produce identical retrieval results to 4 decimal places."
 
       - name: Upload bench results as artifact
         if: always()
