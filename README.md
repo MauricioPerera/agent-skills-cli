@@ -4,6 +4,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/MauricioPerera/agent-skills-cli?label=release)](https://github.com/MauricioPerera/agent-skills-cli/releases)
+[![ci](https://github.com/MauricioPerera/agent-skills-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/MauricioPerera/agent-skills-cli/actions/workflows/ci.yml)
+[![e2e](https://github.com/MauricioPerera/agent-skills-cli/actions/workflows/e2e.yml/badge.svg)](https://github.com/MauricioPerera/agent-skills-cli/actions/workflows/e2e.yml)
 
 ## What this is
 
@@ -624,11 +626,23 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.12.0 | planned | Per-tenant audit scoping (`--user <id>`) + spec v0.2 (formalize bench format, intent in audit, intent-conditional rerank pattern) |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
+## Continuous validation
+
+Two workflows guard against regression:
+
+- **`ci.yml`** — type-check, build, test on every push and PR. Fast (under 2 minutes), no external dependencies.
+- **`e2e.yml`** — ecosystem coherence. Two jobs:
+  1. **`cross-impl-parity`**: clones this CLI + [`agent-skills-py-proof`](https://github.com/MauricioPerera/agent-skills-py-proof) + [`agent-skills-pack`](https://github.com/MauricioPerera/agent-skills-pack), installs Ollama with `all-minilm`, runs `bench` against the same truth file with both implementations, **fails if their numerical results diverge**. Catches silent breakage when a sister repo evolves in a way that drifts retrieval.
+  2. **`author-roundtrip`**: `init` a new pack, `publish --check-only` (must validate clean), `resolve` a scaffolded skill (must produce `echo 'hello world'`). Validates that the author tooling produces output the consumer tooling can ingest.
+
+Runs on every push, on PR, and weekly via cron — the cron picks up sister-repo changes within 7 days even when this repo is quiet.
+
 ## Sister projects
 
-- [`agent-skills`](https://github.com/MauricioPerera/agent-skills) — the **canonical specification**. This CLI implements its v0.1 schema.
-- [`agent-skills-pack`](https://github.com/MauricioPerera/agent-skills-pack) — **example skill pack** with 7 production-ready skills. Used as the integration test corpus for this CLI.
-- [`just-bash-data`](https://github.com/MauricioPerera/just-bash-data) — the **storage runtime** the future `sync`/`query`/`exec` commands will use. Provides `db` (document store) + `vec` (vector search) primitives.
+- [`agent-skills`](https://github.com/MauricioPerera/agent-skills) — the **canonical specification** (v0.2.0).
+- [`agent-skills-pack`](https://github.com/MauricioPerera/agent-skills-pack) — **example skill pack** with 7 production-ready skills + `bench-truth.jsonl`. Integration test corpus for this CLI.
+- [`agent-skills-py-proof`](https://github.com/MauricioPerera/agent-skills-py-proof) — **510-line Python implementation** that produces bit-identical retrieval scores to this CLI. Cross-implementation validation of the spec.
+- [`just-bash-data`](https://github.com/MauricioPerera/just-bash-data) — alternative **storage runtime** providing `db` (document store) + `vec` (vector search) primitives.
 
 ## License
 

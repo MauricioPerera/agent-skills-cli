@@ -1,0 +1,220 @@
+name: e2e — ecosystem coherence
+
+# Cross-repo end-to-end validation. Catches drift across the 4 repos:
+#   agent-skills-cli (this), agent-skills-py-proof, agent-skills-pack, agent-skills.
+#
+# Two jobs, both run real Ollama with all-minilm (46 MB; identical-vector
+# parity validated locally between the TS CLI and the Python proof — see
+# BENCHMARK.md "Cross-implementation parity" note).
+#
+#   1. cross-impl-parity:   sync the public pack with both implementations,
+#                           run bench against the pack's own truth file,
+#                           FAIL if their numerical results diverge.
+#   2. author-roundtrip:    init a new pack, run publish --check-only on it,
+#                           resolve a scaffolded skill — validates that the
+#                           author tooling produces a pack that the consumer
+#                           tooling can ingest.
+#
+# Triggered on push, on PR, AND weekly via cron — the cron catches the
+# case where a sister repo's main branch evolves and silently breaks the
+# integration. Without the cron, drift would be invisible until someone
+# happens to push to this repo.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Sundays 06:00 UTC. Picks up sister-repo changes within 7 days.
+    - cron: "0 6 * * 0"
+  workflow_dispatch:  # manual trigger from the Actions UI
+
+jobs:
+  cross-impl-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout TS CLI
+        uses: actions/checkout@v4
+        with:
+          path: cli
+
+      - name: Checkout Python proof (sister repo)
+        uses: actions/checkout@v4
+        with:
+          repository: MauricioPerera/agent-skills-py-proof
+          path: pyproof
+
+      - name: Checkout skill pack (sister repo) — provides bench-truth.jsonl
+        uses: actions/checkout@v4
+        with:
+          repository: MauricioPerera/agent-skills-pack
+          path: pack
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          # The installer registers a systemd service; start it.
+          sudo systemctl enable --now ollama
+          # Wait for the daemon to be reachable.
+          for i in {1..30}; do
+            if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
+              echo "Ollama up after ${i}s"; break
+            fi
+            sleep 1
+          done
+
+      - name: Pull all-minilm (46 MB; same model both implementations will use)
+        run: ollama pull all-minilm
+
+      - name: Build TS CLI + link
+        working-directory: cli
+        run: |
+          npm ci
+          npm run build
+          npm link
+
+      - name: Install Python proof deps
+        working-directory: pyproof
+        run: pip install pyyaml requests
+
+      - name: Run TS bench
+        working-directory: cli
+        env:
+          EMBEDDING_PROVIDER: ollama
+          OLLAMA_MODEL: all-minilm
+        run: |
+          BANK_TS=$(mktemp -d)
+          echo "BANK_TS=$BANK_TS" >> $GITHUB_ENV
+          agent-skills sync github.com/MauricioPerera/agent-skills-pack@main --bank-dir "$BANK_TS"
+          agent-skills bench ../pack/bench-truth.jsonl --bank-dir "$BANK_TS" --json > /tmp/ts-result.json
+          cat /tmp/ts-result.json | jq '{top1, top3, topK, mean_top1_score, mean_margin, embedding_model}'
+
+      - name: Run Python bench
+        working-directory: pyproof
+        env:
+          OLLAMA_MODEL: all-minilm
+        run: |
+          BANK_PY=$(mktemp -d)
+          python bank.py --bank-dir "$BANK_PY" sync github.com/MauricioPerera/agent-skills-pack@main
+          python bank.py --bank-dir "$BANK_PY" --json bench ../pack/bench-truth.jsonl > /tmp/py-result.json
+          cat /tmp/py-result.json | jq '{top1, top3, topK, mean_top1_score, mean_margin, embedding_model}'
+
+      - name: Compare retrieval outcomes (PARITY CHECK)
+        run: |
+          # Extract the comparable fields. We do NOT compare per-query scores
+          # below 4 decimal places — Ollama's float output is stable but small
+          # noise is plausible. We compare the integer counts (top1, top3, topK)
+          # and the rounded mean stats; a mismatch there is a real divergence.
+          ts_top1=$(jq -r '.top1' /tmp/ts-result.json)
+          ts_top3=$(jq -r '.top3' /tmp/ts-result.json)
+          ts_mean=$(jq -r '.mean_top1_score' /tmp/ts-result.json)
+          ts_margin=$(jq -r '.mean_margin' /tmp/ts-result.json)
+          py_top1=$(jq -r '.top1' /tmp/py-result.json)
+          py_top3=$(jq -r '.top3' /tmp/py-result.json)
+          py_mean=$(jq -r '.mean_top1_score' /tmp/py-result.json)
+          py_margin=$(jq -r '.mean_margin' /tmp/py-result.json)
+
+          echo ""
+          echo "=== Cross-implementation parity ==="
+          echo "TS:  top1=$ts_top1  top3=$ts_top3  mean=$ts_mean  margin=$ts_margin"
+          echo "PY:  top1=$py_top1  top3=$py_top3  mean=$py_mean  margin=$py_margin"
+          echo ""
+
+          fail=0
+          if [ "$ts_top1" != "$py_top1" ]; then echo "::error::top1 mismatch: TS=$ts_top1 PY=$py_top1"; fail=1; fi
+          if [ "$ts_top3" != "$py_top3" ]; then echo "::error::top3 mismatch: TS=$ts_top3 PY=$py_top3"; fail=1; fi
+          if [ "$ts_mean" != "$py_mean" ]; then echo "::error::mean_top1_score mismatch: TS=$ts_mean PY=$py_mean"; fail=1; fi
+          if [ "$ts_margin" != "$py_margin" ]; then echo "::error::mean_margin mismatch: TS=$ts_margin PY=$py_margin"; fail=1; fi
+
+          if [ $fail -ne 0 ]; then
+            echo "::error::Cross-implementation parity broken. Either a sister repo changed in a way that diverges retrieval, or the spec needs an additional clarification. Investigate before merging."
+            exit 1
+          fi
+          echo "✓ TS and Python implementations produce identical retrieval results."
+
+      - name: Upload bench results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: |
+            /tmp/ts-result.json
+            /tmp/py-result.json
+          retention-days: 30
+
+  author-roundtrip:
+    # init → publish (check-only) → resolve a scaffolded skill.
+    # This is the author tooling smoke test; doesn't need Ollama (no embedding
+    # required for resolve), so runs separately and faster.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install + build + link
+        run: |
+          npm ci
+          npm run build
+          npm link
+
+      - name: init a new pack
+        run: |
+          cd $(mktemp -d)
+          agent-skills init demo --pack --author "ci-bot"
+          ls demo/
+          test -f demo/skills/hello-world/SKILL.md
+          test -f demo/llms.txt
+          test -f demo/README.md
+          test -f demo/.github/workflows/validate.yml
+
+      - name: publish --check-only on the scaffolded pack
+        run: |
+          cd $(mktemp -d)
+          agent-skills init demo --pack --author "ci-bot"
+          cd demo
+          agent-skills publish --check-only --json > publish.json
+          # The scaffold MUST be valid out of the box.
+          invalid=$(jq -r '.invalid + .errored' publish.json)
+          if [ "$invalid" != "0" ]; then
+            jq . publish.json
+            echo "::error::Scaffolded pack failed validation. The init template generated an invalid SKILL.md."
+            exit 1
+          fi
+          # Exactly 1 skill should be added (hello-world).
+          added=$(jq -r '.added' publish.json)
+          if [ "$added" != "1" ]; then
+            echo "::error::Expected 1 added skill in publish output, got $added."
+            exit 1
+          fi
+
+      - name: resolve a scaffolded skill (author tooling produces resolve-able output)
+        run: |
+          cd $(mktemp -d)
+          agent-skills init demo --pack
+          cd demo
+          # The hello-world template has command_template "echo {message}".
+          # resolve must produce "echo 'hello world'" (single-quoted per SPEC §2.6).
+          out=$(agent-skills resolve skills/hello-world/SKILL.md --args '{"message":"hello world"}')
+          echo "resolved: $out"
+          if [ "$out" != "echo 'hello world'" ]; then
+            echo "::error::Unexpected resolve output. Expected: echo 'hello world' Got: $out"
+            exit 1
+          fi
+          echo "✓ Scaffold → resolve roundtrip passes."
