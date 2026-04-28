@@ -33,14 +33,24 @@ export type { ResolveResult } from "./lib/substitute.js";
 export { CliError, EXIT, isCliError } from "./lib/errors.js";
 export type { ExitCode } from "./lib/errors.js";
 
-// Embedding providers (Cloudflare + stub) and embedding-text composition
+// Embedding providers (Cloudflare + Ollama + OpenAI + stub) + factory + composition.
+// v0.6.0 added Ollama and OpenAI-compatible providers + resolveEmbedderFromEnv().
 export {
   createCloudflareEmbedder,
+  createOllamaEmbedder,
+  createOpenAIEmbedder,
   createStubEmbedder,
+  resolveEmbedderFromEnv,
   composeEmbeddingText,
   cosineSimilarity,
 } from "./lib/embed.js";
-export type { EmbeddingProvider, CloudflareEmbedderConfig } from "./lib/embed.js";
+export type {
+  EmbeddingProvider,
+  CloudflareEmbedderConfig,
+  OllamaEmbedderConfig,
+  OpenAIEmbedderConfig,
+  ResolveEmbedderOptions,
+} from "./lib/embed.js";
 
 // Rerank + applicable filter (v0.4.0+)
 export {

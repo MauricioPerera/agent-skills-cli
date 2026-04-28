@@ -1,7 +1,7 @@
 // CLI entrypoint for `agent-skills`. Invoked via the bin shim in package.json.
 
 import { FileBank, defaultBankRoot } from "./lib/bank.js";
-import { createCloudflareEmbedder } from "./lib/embed.js";
+import { resolveEmbedderFromEnv } from "./lib/embed.js";
 import { CliError, EXIT, isCliError } from "./lib/errors.js";
 import { printResolveResult, runResolve } from "./commands/resolve.js";
 import { printValidateResult, runValidate } from "./commands/validate.js";
@@ -9,7 +9,7 @@ import { runSync } from "./commands/sync.js";
 import { printQueryResult, runQuery } from "./commands/query.js";
 import { printExecResult, runExec } from "./commands/exec.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -21,7 +21,7 @@ Commands (local, no network):
   resolve <file> --args <json>     Substitute placeholders and print the
                                    resolved command (does NOT execute).
 
-Commands (network — require Cloudflare Workers AI credentials):
+Commands (need an embedding provider — see ENV section below):
   sync <repo>[@<ref>]              Fetch + embed + index skills from a git source.
                                    Default ref: main.
   query "<intent>" [--k N]         Find the top-K skills matching an intent.
@@ -52,14 +52,33 @@ Flags (per command):
   --no-filter           (query) Disable applicable_when filtering. Default: filter ON.
   --rerank-mode <m>     (query) Rerank strategy: intent-conditional (default,
                         v0.5.0+) | global (v0.4.0 behavior) | none.
+  --embedding-provider <p>  (sync, query) Override env auto-detect.
+                        Valid: cloudflare | ollama | openai.
 
-Cloudflare Workers AI environment (for sync + query):
-  CF_ACCOUNT_ID         Your Cloudflare account ID (32 hex chars).
-  CF_API_TOKEN          API token with Workers AI permission.
-  CF_EMBEDDING_MODEL    Optional model override; default: @cf/baai/bge-base-en-v1.5
-                        Other options: @cf/baai/bge-small-en-v1.5 (384-dim, faster)
-                                       @cf/baai/bge-large-en-v1.5 (1024-dim, slower)
-                                       @cf/baai/bge-m3            (1024-dim, multilingual)
+Embedding providers (v0.6.0+ — auto-detected from env, or set EMBEDDING_PROVIDER):
+
+  Cloudflare Workers AI (free tier available):
+    CF_ACCOUNT_ID       Your Cloudflare account ID (32 hex chars).
+    CF_API_TOKEN        API token with Workers AI permission.
+    CF_EMBEDDING_MODEL  Optional. Default @cf/baai/bge-base-en-v1.5 (768-dim).
+                        Others: @cf/baai/bge-small-en-v1.5 (384), bge-large-en-v1.5 (1024), bge-m3 (1024, multilingual).
+
+  Ollama (local, zero credentials, zero network egress):
+    OLLAMA_BASE_URL     Default http://localhost:11434.
+    OLLAMA_MODEL        Default nomic-embed-text (768-dim).
+                        Others: mxbai-embed-large (1024), all-minilm (384), bge-m3 (1024).
+    OLLAMA_DIM          Override the auto-detected dim (only needed for unknown models).
+    Setup:              ollama pull nomic-embed-text
+
+  OpenAI (or any OpenAI-compatible /v1/embeddings server):
+    OPENAI_API_KEY      Required.
+    OPENAI_BASE_URL     Default https://api.openai.com/v1. Override for Together,
+                        Anyscale, Mistral, vLLM, infinity, TEI, etc.
+    OPENAI_MODEL        Default text-embedding-3-small (1536-dim).
+                        Others: text-embedding-3-large (3072), text-embedding-ada-002 (1536).
+    OPENAI_DIM          Optional. For text-embedding-3-* sets the truncated dim.
+
+  Auto-detect priority: CF_* > OPENAI_API_KEY > OLLAMA_*. Override with EMBEDDING_PROVIDER.
 
 Default bank state: ${defaultBankRoot()}
 
@@ -70,9 +89,12 @@ Examples:
   # Resolve (substitute args, don't execute)
   agent-skills resolve skills/x/SKILL.md --args '{"amount":1000}'
 
-  # Sync a public skill pack
-  export CF_ACCOUNT_ID=...
-  export CF_API_TOKEN=...
+  # Sync via local Ollama (zero credentials)
+  ollama pull nomic-embed-text
+  EMBEDDING_PROVIDER=ollama agent-skills sync github.com/MauricioPerera/agent-skills-pack@v1.0.0
+
+  # Sync via Cloudflare Workers AI
+  export CF_ACCOUNT_ID=... CF_API_TOKEN=...
   agent-skills sync github.com/MauricioPerera/agent-skills-pack@v1.0.0
 
   # Query — find skills matching an intent
@@ -210,16 +232,17 @@ const main = async (): Promise<void> => {
     process.exit(EXIT.OK);
   }
 
-  // Embedder is needed for sync + query
-  const accountId = process.env["CF_ACCOUNT_ID"];
-  const apiToken = process.env["CF_API_TOKEN"];
-  const embeddingModel = process.env["CF_EMBEDDING_MODEL"];
-
-  if (cmd === "sync" || cmd === "query") {
-    if (!accountId || !apiToken) {
+  // Embedder is resolved from env (auto-detect: cloudflare | ollama | openai).
+  // CLI flag --embedding-provider <name> can override; passes through to the resolver.
+  const providerFlag = args.flags.get("embedding-provider");
+  let providerOverride: "cloudflare" | "ollama" | "openai" | undefined;
+  if (typeof providerFlag === "string") {
+    if (providerFlag === "cloudflare" || providerFlag === "ollama" || providerFlag === "openai") {
+      providerOverride = providerFlag;
+    } else {
       throw new CliError(
-        EXIT.AUTH,
-        `${cmd}: CF_ACCOUNT_ID and CF_API_TOKEN env vars are required.\nGet them at https://dash.cloudflare.com/profile/api-tokens (token needs 'Workers AI' permission).`,
+        EXIT.USAGE,
+        `--embedding-provider must be one of: cloudflare | ollama | openai`,
       );
     }
   }
@@ -229,11 +252,7 @@ const main = async (): Promise<void> => {
     if (source === undefined) {
       throw new CliError(EXIT.USAGE, "sync: missing <repo>[@<ref>] argument");
     }
-    const embedder = createCloudflareEmbedder({
-      accountId: accountId as string,
-      apiToken: apiToken as string,
-      model: embeddingModel,
-    });
+    const embedder = resolveEmbedderFromEnv({ provider: providerOverride });
     const result = await runSync({ source, bank, embedder });
     if (asJson) {
       process.stdout.write(JSON.stringify(result) + "\n");
@@ -273,11 +292,7 @@ const main = async (): Promise<void> => {
       }
     }
     if (noRerank) rerankMode = "none";
-    const embedder = createCloudflareEmbedder({
-      accountId: accountId as string,
-      apiToken: apiToken as string,
-      model: embeddingModel,
-    });
+    const embedder = resolveEmbedderFromEnv({ provider: providerOverride });
     const result = await runQuery({
       intent,
       k,

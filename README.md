@@ -13,11 +13,17 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
-**v0.5.0** — intent-conditional rerank as the new default. The CLI now:
+**v0.6.0** — multi-provider embeddings. The CLI now works against:
+
+- **Cloudflare Workers AI** (`bge-base-en-v1.5` / `bge-large` / `bge-m3` / `embeddinggemma`).
+- **Ollama** (local, zero credentials, zero network egress — `nomic-embed-text` by default).
+- **OpenAI / OpenAI-compatible** (`text-embedding-3-small/large` + Together / Anyscale / Mistral / vLLM / infinity / TEI any server speaking the same `/v1/embeddings` shape).
+
+Auto-detected from your environment (or set `EMBEDDING_PROVIDER` explicitly). Same loop:
 
 ```
 sync   → pulls + embeds + indexes a skill pack from any git source
-query  → finds the right skill from intent (NEW: --rerank-mode intent-conditional|global|none)
+query  → finds the right skill from intent (--rerank-mode intent-conditional|global|none)
 exec   → runs the resolved command via bash + appends an audit entry
 audit  → inspects the local audit log
 ```
@@ -66,16 +72,41 @@ The CLI will be published to npm once the public API is frozen at v1.0. Until th
 "agent-skills-cli": "github:MauricioPerera/agent-skills-cli#v0.5.0"
 ```
 
-## End-to-end demo (with Cloudflare Workers AI)
+## End-to-end demo
+
+Pick **one** of the three embedding providers below. Everything else is identical.
+
+### Option A — Local with Ollama (zero credentials, zero network)
 
 ```bash
-# 1. Get Cloudflare credentials
-#    https://dash.cloudflare.com/profile/api-tokens
-#    Create a token with "Workers AI" permission.
+# 1. Pull an embedding model into Ollama (one-time, ~270 MB for nomic-embed-text)
+ollama pull nomic-embed-text
+
+# 2. Tell the CLI to use it (defaults to localhost:11434, model nomic-embed-text)
+export EMBEDDING_PROVIDER=ollama
+```
+
+### Option B — Cloudflare Workers AI (free tier available)
+
+```bash
+# 1. Get credentials from https://dash.cloudflare.com/profile/api-tokens
+#    (token needs "Workers AI" permission)
 export CF_ACCOUNT_ID=<32-hex-account-id>
 export CF_API_TOKEN=<your-token>
+```
 
-# 2. Sync a real skill pack (7 production-ready skills)
+### Option C — OpenAI (or any OpenAI-compatible server)
+
+```bash
+export OPENAI_API_KEY=sk-...
+# Optional: point at a compatible server (Together / Mistral / vLLM / TEI / infinity / …)
+# export OPENAI_BASE_URL=https://api.together.xyz/v1
+```
+
+### Same flow regardless of provider
+
+```bash
+# 1. Sync a real skill pack (7 production-ready skills)
 $ agent-skills sync github.com/MauricioPerera/agent-skills-pack@v1.0.0
 Synced github.com/MauricioPerera/agent-skills-pack@v1.0.0
   ref: v1.0.0 → 4f5a2c7e9b1d3f8a6c0e7d2b5f9a1c4e8d3b6a72
@@ -273,10 +304,11 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.2.0 | shipped | + `sync` + `query` + `list` + `reset`; Cloudflare Workers AI embeddings |
 | v0.3.0 | shipped | + `exec` (bash subprocess + 3-stage kill ladder + sensitive-arg redaction) + `audit` (append-only JSONL log); closes agent loop end-to-end |
 | v0.4.0 | shipped | + audit-based rerank (`α·log(1+usage)` + recency); applicable_when host detection; 5-strategy benchmark exposing global-rerank failure mode |
-| **v0.5.0** | **shipped** | + intent-conditional rerank as default (`IntentEmbeddingCache` + sim≥0.7 filter); fixes the 50-use stress failure with **100 % top-1** on live Workers AI; 192/192 tests |
-| v0.6.0 | planned | `publish` (skill author tooling); multi-provider embeddings (Ollama, OpenAI, generic HTTP) |
-| v0.7.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
-| v0.8.0 | planned | IVF-style ANN backend (swap-in for FileBank when catalog grows) |
+| v0.5.0 | shipped | + intent-conditional rerank as default (`IntentEmbeddingCache` + sim≥0.7 filter); fixes the 50-use stress failure with **100 % top-1** on live Workers AI |
+| **v0.6.0** | **shipped** | + Ollama (local, zero-credential) + OpenAI / OpenAI-compatible (Together / vLLM / TEI / infinity / …) embedding providers; auto-detect from env or `EMBEDDING_PROVIDER` flag; 217/217 tests |
+| v0.7.0 | planned | `publish` (skill author tooling); per-tenant audit scoping; `bench` subcommand (ground-truth top-K accuracy reporting) |
+| v0.8.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
+| v0.9.0 | planned | IVF-style ANN backend (swap-in for FileBank when catalog grows) |
 | v1.0.0 | planned | Stable API + full SPEC v1.0 coverage; **first npm publication** (under a final, owned name — current `agent-skills-cli` on npm is an unrelated squat) |
 
 ## Sister projects
