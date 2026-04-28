@@ -127,3 +127,116 @@ export const rerank = (
   out.sort((a, b) => b.final_score - a.final_score);
   return out;
 };
+
+// ────────────────────────────────────────────────────────────────────
+// Intent-conditional rerank (v0.5.0+)
+// ────────────────────────────────────────────────────────────────────
+
+export interface IntentConditionalConfig extends RerankConfig {
+  /**
+   * Cosine threshold for past-intent similarity to current query. Past audit
+   * entries whose intent embedding has cos < threshold against the current
+   * query are EXCLUDED from the per-skill count.
+   *
+   * Default: 0.7 — selected based on the v0.4.0 BENCHMARK experiment which
+   * showed sim≥0.7 captured genuinely related past intents while sim≥0.8
+   * was too restrictive on the 7-skill corpus. Operators can tune.
+   */
+  similarityThreshold?: number;
+}
+
+const DEFAULT_SIMILARITY_THRESHOLD = 0.7;
+
+/**
+ * Per-skill intent embeddings: { skill_id → array of past-intent vectors }.
+ * The bank populates this from audit entries that have an `intent` field,
+ * after embedding each intent (cached via IntentEmbeddingCache).
+ */
+export type SkillIntentMap = Map<
+  string,
+  Array<{ intent: string; vec: number[]; timestamp: string }>
+>;
+
+/**
+ * Cosine similarity between two equal-length vectors. (Local copy to keep
+ * this module dependency-free; equivalent to embed.cosineSimilarity().)
+ */
+const cosineSim = (a: number[], b: number[]): number => {
+  let dot = 0, na = 0, nb = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const ai = a[i] ?? 0;
+    const bi = b[i] ?? 0;
+    dot += ai * bi;
+    na += ai * ai;
+    nb += bi * bi;
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom === 0 ? 0 : dot / denom;
+};
+
+export interface IntentConditionalOutput extends RerankOutput {
+  /**
+   * Number of past invocations of this skill where the recorded intent was
+   * similar (cos ≥ threshold) to the current query. Replaces `usage_count`
+   * for boost computation.
+   */
+  conditional_count: number;
+}
+
+/**
+ * Intent-conditional rerank.
+ *
+ * Same blend as `rerank()` but the usage_count is replaced by
+ * conditional_count: only past invocations with intent similar to the
+ * current query are counted.
+ *
+ * This guards against the failure mode documented in v0.4.0 BENCHMARK:
+ * a skill heavily used for unrelated tasks should NOT get boosted on the
+ * current query just because its global usage is high.
+ */
+export const intentConditionalRerank = (
+  candidates: RerankInput[],
+  currentQueryVec: number[],
+  perSkillIntents: SkillIntentMap,
+  config: IntentConditionalConfig = {},
+  nowIso: string = new Date().toISOString(),
+): IntentConditionalOutput[] => {
+  const alpha = config.alpha ?? DEFAULT_ALPHA;
+  const beta = config.beta ?? DEFAULT_BETA;
+  const halfLifeDays = config.recencyHalfLifeDays ?? DEFAULT_RECENCY_HALF_LIFE_DAYS;
+  const threshold = config.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
+
+  const out: IntentConditionalOutput[] = candidates.map((c) => {
+    const intents = perSkillIntents.get(c.skill_id) ?? [];
+    let conditional_count = 0;
+    let mostRecentRelevantTs: string | null = null;
+
+    for (const past of intents) {
+      const sim = cosineSim(currentQueryVec, past.vec);
+      if (sim >= threshold) {
+        conditional_count += 1;
+        if (mostRecentRelevantTs === null || past.timestamp > mostRecentRelevantTs) {
+          mostRecentRelevantTs = past.timestamp;
+        }
+      }
+    }
+
+    const usage_boost = alpha * Math.log(1 + conditional_count);
+    const recency_boost = beta * computeRecency(mostRecentRelevantTs, nowIso, halfLifeDays);
+    const final_score = c.cosine + usage_boost + recency_boost;
+
+    return {
+      skill_id: c.skill_id,
+      cosine: c.cosine,
+      usage_count: intents.length, // total past intents (informational)
+      conditional_count,            // count after similarity filter
+      recency_boost,
+      usage_boost,
+      final_score,
+    };
+  });
+
+  out.sort((a, b) => b.final_score - a.final_score);
+  return out;
+};

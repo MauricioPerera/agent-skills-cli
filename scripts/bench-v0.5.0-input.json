@@ -1,0 +1,426 @@
+{
+  "skills": [
+    {
+      "id": "http-get",
+      "text": "HTTP GET request. the user wants to fetch the contents of a URL — a webpage, API response, or remote text file. Performs an HTTP GET request against a URL and returns the response body. Follows redirects by default. Fails on non-2xx status.. fetch the content of https://example.com\nget the JSON from a public API endpoint\ndownload a raw file from GitHub with a 10 second timeout. http curl fetch get download"
+    },
+    {
+      "id": "http-post-json",
+      "text": "HTTP POST with JSON body. the user wants to send structured data to a JSON-accepting HTTP endpoint — most modern REST APIs, GraphQL endpoints, webhooks. Performs an HTTP POST request with a JSON body. Sets Content-Type and Accept headers. Body is composed via jq from a structured object passed as args.. send a JSON webhook payload to a Slack webhook URL\nPOST a small JSON object to an API endpoint that expects {name, age}\ntrigger a GraphQL query against a public GraphQL API. http curl post json api webhook"
+    },
+    {
+      "id": "github-issue-create",
+      "text": "Create a GitHub issue. the user wants to file a bug, feature request, or task as a GitHub issue in a repository they have write access to. Creates a new GitHub issue in a specified repository using the gh CLI. Authentication is delegated to gh's own credential system — the agent never sees the token.. open an issue in MauricioPerera/agent-skills called 'Add Korean translation'\nreport a bug in some/repo about authentication failing on Tuesdays\nfile a feature request titled 'Dark mode' against acme/dashboard. github gh issue tracker bug-report"
+    },
+    {
+      "id": "ripgrep-search",
+      "text": "Search code with ripgrep. the user wants to find a string, regex, or symbol across multiple files in a codebase or directory tree. Recursively searches files in a directory for a regex pattern using ripgrep. Returns matching lines with file:line:column prefixes. Respects .gitignore by default.. find all uses of 'TODO' in src/\nsearch for the regex 'function\\s+(\\w+)' in the lib directory\nfind email addresses anywhere under the current directory\nsearch for 'panic!' in the entire workspace, but limit to 10 hits per file. search ripgrep rg grep code-search regex"
+    },
+    {
+      "id": "read-file",
+      "text": "Read a file's content. the user wants to inspect the content of a specific file by path — source code, config, log excerpt, etc.. Reads the contents of a file from the local filesystem and writes it to stdout. Optionally limits to the first N lines.. show me the contents of package.json\nread the first 100 lines of src/main.rs\nopen ~/.bashrc and show everything\nshow the first 10 lines of a log file. read file cat inspect head"
+    },
+    {
+      "id": "json-query",
+      "text": "Query JSON with jq. the user wants to extract, transform, or reshape JSON — pull specific fields, filter arrays, compute aggregates, reformat structure. Applies a jq filter to a JSON input and writes the result to stdout. Input can be a file path or stdin (passed as the {input} arg).. extract every 'name' field from a list of users in users.json\ncount items in a JSON array from a file\nextract only the open issues from a github API response\nreshape API response to keep only id and email\nread JSON from stdin and pretty-print indented. jq json query filter transform"
+    },
+    {
+      "id": "base64-encode",
+      "text": "Base64 encode a string. the user wants to convert a string to its base64 representation — for embedding in URLs, Authorization headers, JWTs, etc.. Encodes a string as base64. Useful for embedding binary or special-character data in URLs, JSON tokens, or HTTP headers.. encode 'hello world' as base64\ncreate a Basic Auth header value for user:password\nencode a JSON payload for embedding in a URL fragment\nbase64 encode the empty string (yields empty output). base64 encode url-safe encoding"
+    }
+  ],
+  "paraphrases": [
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-get",
+      "q": "fetch the contents of a URL"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-get",
+      "q": "GET request to a webpage"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-get",
+      "q": "download a json document over http"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-get",
+      "q": "retrieve data from an API endpoint"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-get",
+      "q": "read what's at this https url"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-post-json",
+      "q": "POST a JSON body to an API"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-post-json",
+      "q": "send JSON to a webhook endpoint"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-post-json",
+      "q": "submit a JSON payload via http"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-post-json",
+      "q": "make an HTTP POST with a request body"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/http-post-json",
+      "q": "push data to a REST endpoint as JSON"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/github-issue-create",
+      "q": "open a new GitHub issue"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/github-issue-create",
+      "q": "file a bug report on a repo"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/github-issue-create",
+      "q": "create a ticket on GitHub"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/github-issue-create",
+      "q": "submit an issue to a repository"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/github-issue-create",
+      "q": "report a problem in a github project"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/ripgrep-search",
+      "q": "search for a regex pattern across files"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/ripgrep-search",
+      "q": "find all TODO comments in the source"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/ripgrep-search",
+      "q": "grep through a codebase for a string"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/ripgrep-search",
+      "q": "look for pattern matches in many files"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/ripgrep-search",
+      "q": "scan all source files for a regex"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/read-file",
+      "q": "show me the contents of package.json"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/read-file",
+      "q": "open a file from disk and print it"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/read-file",
+      "q": "cat the README"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/read-file",
+      "q": "load a local text file"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/read-file",
+      "q": "display what's inside a file path"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/json-query",
+      "q": "extract a field from JSON data"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/json-query",
+      "q": "query JSON with a path expression"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/json-query",
+      "q": "pluck the .name field out of this object"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/json-query",
+      "q": "filter a JSON array by a property"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/json-query",
+      "q": "use jq-like syntax to traverse JSON"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "q": "encode a string as base64"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "q": "create an Authorization header value"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "q": "make a Basic Auth credential"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "q": "convert text to base64"
+    },
+    {
+      "expected": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "q": "build a base64-encoded token"
+    }
+  ],
+  "pastIntents": [
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 0 as base64",
+      "daysAgo": 0
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 1 as base64",
+      "daysAgo": 0.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 2 as base64",
+      "daysAgo": 1
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 3 as base64",
+      "daysAgo": 1.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 4 as base64",
+      "daysAgo": 2
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 5 as base64",
+      "daysAgo": 2.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 6 as base64",
+      "daysAgo": 3
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 7 as base64",
+      "daysAgo": 3.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 8 as base64",
+      "daysAgo": 4
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "encode credential 9 as base64",
+      "daysAgo": 4.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 0",
+      "daysAgo": 5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 1",
+      "daysAgo": 5.3
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 2",
+      "daysAgo": 5.6
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 3",
+      "daysAgo": 5.9
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 4",
+      "daysAgo": 6.2
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 5",
+      "daysAgo": 6.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 6",
+      "daysAgo": 6.8
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 7",
+      "daysAgo": 7.1
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 8",
+      "daysAgo": 7.4
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "make a Basic Auth header for service 9",
+      "daysAgo": 7.699999999999999
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 0 to base64",
+      "daysAgo": 8
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 1 to base64",
+      "daysAgo": 8.4
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 2 to base64",
+      "daysAgo": 8.8
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 3 to base64",
+      "daysAgo": 9.2
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 4 to base64",
+      "daysAgo": 9.6
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 5 to base64",
+      "daysAgo": 10
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 6 to base64",
+      "daysAgo": 10.4
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 7 to base64",
+      "daysAgo": 10.8
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 8 to base64",
+      "daysAgo": 11.2
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "convert username:password 9 to base64",
+      "daysAgo": 11.6
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #0",
+      "daysAgo": 12
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #1",
+      "daysAgo": 12.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #2",
+      "daysAgo": 13
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #3",
+      "daysAgo": 13.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #4",
+      "daysAgo": 14
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #5",
+      "daysAgo": 14.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #6",
+      "daysAgo": 15
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #7",
+      "daysAgo": 15.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #8",
+      "daysAgo": 16
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "generate Authorization token #9",
+      "daysAgo": 16.5
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 0",
+      "daysAgo": 15
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 1",
+      "daysAgo": 15.6
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 2",
+      "daysAgo": 16.2
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 3",
+      "daysAgo": 16.8
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 4",
+      "daysAgo": 17.4
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 5",
+      "daysAgo": 18
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 6",
+      "daysAgo": 18.6
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 7",
+      "daysAgo": 19.2
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 8",
+      "daysAgo": 19.8
+    },
+    {
+      "skill_id": "github.com/MauricioPerera/agent-skills-pack/base64-encode",
+      "intent": "build base64 string for blob 9",
+      "daysAgo": 20.4
+    }
+  ]
+}

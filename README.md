@@ -13,31 +13,30 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
-**v0.4.0** — the audit log becomes a feedback loop. The CLI now:
+**v0.5.0** — intent-conditional rerank as the new default. The CLI now:
 
 ```
 sync   → pulls + embeds + indexes a skill pack from any git source
-query  → finds the right skill from intent (NEW: applicable_when filter + audit-based rerank)
+query  → finds the right skill from intent (NEW: --rerank-mode intent-conditional|global|none)
 exec   → runs the resolved command via bash + appends an audit entry
 audit  → inspects the local audit log
 ```
 
 Plus local-only commands (`validate`, `resolve`) and bank management (`list`, `reset`).
 
-**Empirical claim updated** (v0.4.0 with intent-conditional rerank, default settings):
-- Cosine baseline: 34/35 top-1 = 97.1%, top-3 = 100%.
-- + audit rerank with realistic usage: **35/35 top-1 = 100%, top-3 = 100%**.
-- Stress test (50× concentrated usage, α=0.05): rerank degrades to 16/35 — exposed in BENCHMARK.md as a known failure mode of naive global-count rerank. Mitigation: lower `α`, or disable rerank, or wait for v0.5.0 intent-conditional.
+**Empirical claim updated** (v0.5.0, live `@cf/baai/bge-base-en-v1.5`, 35 paraphrases × 7 skills, 50 concentrated past uses on `base64-encode`):
 
-See [BENCHMARK.md](./BENCHMARK.md) for full methodology, 5 rerank strategies compared, and operator tuning guidance.
+| Strategy | Top-1 |
+|---|---:|
+| Cosine baseline | 34/35 (97.1 %) |
+| Global rerank (the v0.4.0 stress failure) | **12/35 (34.3 %) ⚠️** |
+| **Intent-conditional sim≥0.7 (v0.5.0 default)** | **35/35 (100 %) ✓** |
 
-> **Empirical validation** (35 paraphrases × 3 embedding models = 105 query evaluations against the public skill pack):
-> - **Top-1 accuracy**: 97-100% depending on model.
-> - **Top-3 accuracy**: 100% across all 3 models tested.
-> - Best for English: `bge-large-en-v1.5` (35/35 top-1).
-> - Best free-tier: `bge-base-en-v1.5` (34/35 top-1, 35/35 top-3).
->
-> Full methodology + tables + failure analysis: [BENCHMARK.md](./BENCHMARK.md).
+The same audit log that destroys global-mode rerank (50 uses of one skill → it wins almost every query) is what makes intent-conditional rerank exceed the cosine baseline (it correctly resolves the "Basic Auth credential" ambiguity using the relevant past intents while ignoring the rest).
+
+Full methodology, all 5 strategies compared, failure breakdowns, and operator tuning guidance: [BENCHMARK.md](./BENCHMARK.md).
+
+> **Earlier validation still holds** (35 paraphrases × 3 embedding models = 105 query evaluations on the public skill pack, no rerank): top-1 97–100 %, top-3 100 % across all 3 models.
 
 ## Install
 
@@ -260,10 +259,12 @@ Make sure your dependency line uses the published version:
 |---|---|---|
 | v0.2.0-alpha | shipped | `validate` + `resolve` (local-only) + library API |
 | v0.2.0 | shipped | + `sync` + `query` + `list` + `reset`; Cloudflare Workers AI embeddings |
-| **v0.3.0** | **shipped** | + `exec` (bash subprocess + 3-stage kill ladder + sensitive-arg redaction) + `audit` (append-only JSONL log); 154/154 tests; closes agent loop end-to-end |
-| v0.4.0 | planned | `publish` (skill author tooling: validate + stamp + git tag); multi-provider embeddings (Ollama, OpenAI, generic HTTP) |
-| v0.5.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
-| v0.6.0 | planned | IVF-style ANN backend (swap-in for FileBank when catalog grows) |
+| v0.3.0 | shipped | + `exec` (bash subprocess + 3-stage kill ladder + sensitive-arg redaction) + `audit` (append-only JSONL log); closes agent loop end-to-end |
+| v0.4.0 | shipped | + audit-based rerank (`α·log(1+usage)` + recency); applicable_when host detection; 5-strategy benchmark exposing global-rerank failure mode |
+| **v0.5.0** | **shipped** | + intent-conditional rerank as default (`IntentEmbeddingCache` + sim≥0.7 filter); fixes the 50-use stress failure with **100 % top-1** on live Workers AI; 192/192 tests |
+| v0.6.0 | planned | `publish` (skill author tooling); multi-provider embeddings (Ollama, OpenAI, generic HTTP) |
+| v0.7.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
+| v0.8.0 | planned | IVF-style ANN backend (swap-in for FileBank when catalog grows) |
 | v1.0.0 | planned | Stable API + full SPEC v1.0 coverage |
 
 ## Sister projects

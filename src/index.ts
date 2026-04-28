@@ -42,13 +42,21 @@ export {
 } from "./lib/embed.js";
 export type { EmbeddingProvider, CloudflareEmbedderConfig } from "./lib/embed.js";
 
-// Rerank + applicable filter (v0.4.0)
-export { aggregateUsage, rerank, computeRecency } from "./lib/rerank.js";
+// Rerank + applicable filter (v0.4.0+)
+export {
+  aggregateUsage,
+  rerank,
+  intentConditionalRerank,
+  computeRecency,
+} from "./lib/rerank.js";
 export type {
   RerankConfig,
+  IntentConditionalConfig,
   SkillUsageStats,
+  SkillIntentMap,
   RerankInput,
   RerankOutput,
+  IntentConditionalOutput,
 } from "./lib/rerank.js";
 export {
   detectHost,
@@ -56,6 +64,9 @@ export {
   checkApplicability,
 } from "./lib/applicable.js";
 export type { HostContext, ApplicabilityResult } from "./lib/applicable.js";
+
+// Intent embedding cache (v0.5.0+, used internally by intent-conditional rerank)
+export { IntentEmbeddingCache } from "./lib/intent-cache.js";
 
 // File-based skill bank
 export { FileBank, defaultBankRoot } from "./lib/bank.js";
@@ -84,7 +95,13 @@ export type {
 } from "./commands/sync.js";
 
 export { runQuery, printQueryResult } from "./commands/query.js";
-export type { QueryOptions, QueryResult, QueryHit } from "./commands/query.js";
+export type {
+  QueryOptions,
+  QueryResult,
+  QueryHit,
+  FilteredOut,
+  RerankMode,
+} from "./commands/query.js";
 
 export { runExec, printExecResult } from "./commands/exec.js";
 export type { ExecOptions, ExecResult } from "./commands/exec.js";

@@ -1,0 +1,29 @@
+{
+  "_comment": "Live result from @cf/baai/bge-base-en-v1.5 on the agent-skills-pack@v1.0.0 corpus (7 skills, 35 paraphrases, 50 past intents on base64-encode). Run via the Cloudflare connector on 2026-04-27.",
+  "model": "@cf/baai/bge-base-en-v1.5",
+  "n_skills": 7,
+  "n_queries": 35,
+  "n_past_intents": 50,
+  "alpha": 0.05,
+  "beta": 0.03,
+  "half_life_days": 7,
+  "strategies": {
+    "A_cosine_baseline":            { "top1": "34/35", "top3": "35/35", "top1_pct": 97.1 },
+    "B_global_50uses_alpha_0.05":   { "top1": "12/35", "top3": "35/35", "top1_pct": 34.3 },
+    "C_intent_conditional_sim_0.7": { "top1": "35/35", "top3": "35/35", "top1_pct": 100   },
+    "D_intent_conditional_sim_0.8": { "top1": "35/35", "top3": "35/35", "top1_pct": 100   },
+    "E_intent_conditional_sim_0.6": { "top1": "33/35", "top3": "35/35", "top1_pct": 94.3 }
+  },
+  "failures": {
+    "A": [
+      { "q": "make a Basic Auth credential", "expected": "base64-encode", "got": "github-issue-create", "rank": 2 }
+    ],
+    "B_summary": "23/35 misranked — base64-encode (the 50-use skill) won 23 unrelated queries about http-get, http-post-json, github-issue-create, ripgrep-search, read-file, json-query. The +0.196 global boost overwhelmed cosine.",
+    "C": [],
+    "D": [],
+    "E": [
+      { "q": "submit a JSON payload via http", "expected": "http-post-json", "got": "base64-encode", "rank": 2 },
+      { "q": "make an HTTP POST with a request body", "expected": "http-post-json", "got": "base64-encode", "rank": 2 }
+    ]
+  }
+}

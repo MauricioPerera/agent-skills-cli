@@ -9,7 +9,7 @@ import { runSync } from "./commands/sync.js";
 import { printQueryResult, runQuery } from "./commands/query.js";
 import { printExecResult, runExec } from "./commands/exec.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -50,6 +50,8 @@ Flags (per command):
   --skill <id>          (audit) Filter to one skill identity.
   --no-rerank           (query) Disable audit-based re-rank. Default: rerank ON.
   --no-filter           (query) Disable applicable_when filtering. Default: filter ON.
+  --rerank-mode <m>     (query) Rerank strategy: intent-conditional (default,
+                        v0.5.0+) | global (v0.4.0 behavior) | none.
 
 Cloudflare Workers AI environment (for sync + query):
   CF_ACCOUNT_ID         Your Cloudflare account ID (32 hex chars).
@@ -261,6 +263,16 @@ const main = async (): Promise<void> => {
     const k = typeof kFlag === "string" ? Number(kFlag) : undefined;
     const noRerank = args.flags.get("no-rerank") === true;
     const noFilter = args.flags.get("no-filter") === true;
+    const rerankModeFlag = args.flags.get("rerank-mode");
+    let rerankMode: "global" | "intent-conditional" | "none" = "intent-conditional";
+    if (typeof rerankModeFlag === "string") {
+      if (rerankModeFlag === "global" || rerankModeFlag === "intent-conditional" || rerankModeFlag === "none") {
+        rerankMode = rerankModeFlag;
+      } else {
+        throw new CliError(EXIT.USAGE, `--rerank-mode must be one of: intent-conditional | global | none`);
+      }
+    }
+    if (noRerank) rerankMode = "none";
     const embedder = createCloudflareEmbedder({
       accountId: accountId as string,
       apiToken: apiToken as string,
@@ -271,7 +283,7 @@ const main = async (): Promise<void> => {
       k,
       bank,
       embedder,
-      rerank: !noRerank,
+      rerankMode,
       filterApplicable: !noFilter,
     });
     printQueryResult(result, asJson);

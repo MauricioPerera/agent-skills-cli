@@ -9,23 +9,54 @@
 //   - Filters out skills whose applicable_when isn't satisfied by the host.
 //   - Re-ranks by audit-derived signals (usage_count + recency).
 
-import type { FileBank, IndexedSkill } from "../lib/bank.js";
+import type { AuditEntry, FileBank, IndexedSkill } from "../lib/bank.js";
 import type { EmbeddingProvider } from "../lib/embed.js";
 import { CliError, EXIT } from "../lib/errors.js";
-import { aggregateUsage, rerank, type RerankConfig } from "../lib/rerank.js";
+import {
+  aggregateUsage,
+  intentConditionalRerank,
+  rerank,
+  type IntentConditionalConfig,
+  type RerankConfig,
+  type SkillIntentMap,
+} from "../lib/rerank.js";
 import { checkApplicability, detectHost } from "../lib/applicable.js";
+import { IntentEmbeddingCache } from "../lib/intent-cache.js";
+import { join } from "node:path";
+
+/**
+ * Rerank strategy.
+ *
+ *   - "global": cosine + α·log(1+global_usage_count) + β·recency.
+ *               Simple, but vulnerable to concentrated usage (see v0.4.0
+ *               BENCHMARK stress test).
+ *
+ *   - "intent-conditional": cosine + α·log(1+similar_past_intent_count)
+ *               + β·recency_of_relevant_past. Past audit entries are filtered
+ *               by intent similarity to the current query before counting.
+ *               Robust against concentrated usage on unrelated tasks.
+ *               (Default in v0.5.0+.)
+ *
+ *   - "none": pure cosine, no rerank.
+ */
+export type RerankMode = "global" | "intent-conditional" | "none";
 
 export interface QueryOptions {
   intent: string;
   k?: number;
   bank: FileBank;
   embedder: EmbeddingProvider;
-  /** Apply audit-based rerank. Default: true. */
-  rerank?: boolean;
+  /** Rerank strategy. Default: "intent-conditional". */
+  rerankMode?: RerankMode;
   /** Drop skills failing applicable_when. Default: true. */
   filterApplicable?: boolean;
   /** Override rerank weights for testing or tuning. */
-  rerankConfig?: RerankConfig;
+  rerankConfig?: RerankConfig | IntentConditionalConfig;
+  /**
+   * Backwards-compat shim for v0.4.0: if `rerank` is `false`, force
+   * mode = "none". Internal code should prefer `rerankMode`.
+   */
+  rerank?: boolean;
 }
 
 export interface QueryHit {
@@ -36,9 +67,11 @@ export interface QueryHit {
   score: number;
   /** Pure cosine similarity, always reported even if rerank applied. */
   cosine: number;
-  /** Audit-derived usage count for this skill in the local bank. */
+  /** Total audit-derived usage count for this skill (across all intents). */
   usage_count: number;
-  /** Boost applied to the score from usage_count (≥0). */
+  /** When mode = intent-conditional, the count after similarity filter. Else equals usage_count. */
+  conditional_count?: number;
+  /** Boost applied to the score from usage_count or conditional_count (≥0). */
   usage_boost: number;
   /** Boost applied from recency (0..β). */
   recency_boost: number;
@@ -58,11 +91,13 @@ export interface FilteredOut {
 export interface QueryResult {
   intent: string;
   embedding_model: string;
-  rerank_applied: boolean;
+  rerank_mode: RerankMode;
   filter_applied: boolean;
   hits: QueryHit[];
   /** Skills that scored well but were filtered out by applicable_when. */
   filtered_out?: FilteredOut[];
+  /** Backward-compat (deprecated v0.5.0): true iff rerank_mode != "none". */
+  rerank_applied: boolean;
 }
 
 export const runQuery = async (opts: QueryOptions): Promise<QueryResult> => {
@@ -95,8 +130,11 @@ export const runQuery = async (opts: QueryOptions): Promise<QueryResult> => {
   }
 
   const k = opts.k ?? 5;
-  const rerankEnabled = opts.rerank !== false; // default on
   const filterEnabled = opts.filterApplicable !== false; // default on
+
+  // Determine rerank mode (with v0.4.0 backwards-compat shim)
+  let mode: RerankMode = opts.rerankMode ?? "intent-conditional";
+  if (opts.rerank === false) mode = "none"; // legacy --no-rerank flag
 
   // 1. Get a wider candidate set than k so filtering doesn't starve us
   const oversampleK = Math.max(k * 3, 10);
@@ -120,9 +158,28 @@ export const runQuery = async (opts: QueryOptions): Promise<QueryResult> => {
     });
   }
 
-  // 3. Optionally rerank using audit signals
-  let scored: Array<{ skill: IndexedSkill; cosine: number; final: number; usage_count: number; usage_boost: number; recency_boost: number }>;
-  if (rerankEnabled) {
+  // 3. Rerank by mode
+  type Scored = {
+    skill: IndexedSkill;
+    cosine: number;
+    final: number;
+    usage_count: number;
+    conditional_count?: number;
+    usage_boost: number;
+    recency_boost: number;
+  };
+  let scored: Scored[];
+
+  if (mode === "none") {
+    scored = applicable.map(({ skill, score }) => ({
+      skill,
+      cosine: score,
+      final: score,
+      usage_count: 0,
+      usage_boost: 0,
+      recency_boost: 0,
+    }));
+  } else if (mode === "global") {
     const auditEntries = await opts.bank.listAudit({});
     const usageStats = aggregateUsage(auditEntries);
     const reranked = rerank(
@@ -140,14 +197,8 @@ export const runQuery = async (opts: QueryOptions): Promise<QueryResult> => {
       recency_boost: r.recency_boost,
     }));
   } else {
-    scored = applicable.map(({ skill, score }) => ({
-      skill,
-      cosine: score,
-      final: score,
-      usage_count: 0,
-      usage_boost: 0,
-      recency_boost: 0,
-    }));
+    // intent-conditional
+    scored = await runIntentConditional(opts, applicable, queryEmbedding);
   }
 
   // 4. Trim to top-k for the agent
@@ -156,27 +207,111 @@ export const runQuery = async (opts: QueryOptions): Promise<QueryResult> => {
   const result: QueryResult = {
     intent: opts.intent,
     embedding_model: meta.embedding_model,
-    rerank_applied: rerankEnabled,
+    rerank_mode: mode,
+    rerank_applied: mode !== "none",
     filter_applied: filterEnabled,
-    hits: top.map((h) => ({
-      identity: h.skill.identity,
-      title: h.skill.title,
-      use_when: h.skill.use_when,
-      score: h.final,
-      cosine: h.cosine,
-      usage_count: h.usage_count,
-      usage_boost: h.usage_boost,
-      recency_boost: h.recency_boost,
-      command_template: h.skill.command_template,
-      required_env: h.skill.required_env,
-      category: h.skill.category,
-      tags: h.skill.tags,
-      provenance: h.skill.provenance,
-    })),
+    hits: top.map((h) => {
+      const hit: QueryHit = {
+        identity: h.skill.identity,
+        title: h.skill.title,
+        use_when: h.skill.use_when,
+        score: h.final,
+        cosine: h.cosine,
+        usage_count: h.usage_count,
+        usage_boost: h.usage_boost,
+        recency_boost: h.recency_boost,
+        command_template: h.skill.command_template,
+        required_env: h.skill.required_env,
+        category: h.skill.category,
+        tags: h.skill.tags,
+        provenance: h.skill.provenance,
+      };
+      if (h.conditional_count !== undefined) hit.conditional_count = h.conditional_count;
+      return hit;
+    }),
   };
 
   if (filteredOut.length > 0) result.filtered_out = filteredOut;
   return result;
+};
+
+/**
+ * Helper: run intent-conditional rerank.
+ *
+ * Steps:
+ *   1. Read all audit entries with an `intent` field.
+ *   2. Group intents per skill_id.
+ *   3. Embed each unique intent (cached in <bank>/intent-embeddings.json).
+ *   4. Build SkillIntentMap and call intentConditionalRerank().
+ *
+ * Falls back to "global" mode if no audit history exists yet (cold start).
+ */
+const runIntentConditional = async (
+  opts: QueryOptions,
+  applicable: Array<{ skill: IndexedSkill; score: number }>,
+  queryEmbedding: number[],
+): Promise<Array<{
+  skill: IndexedSkill;
+  cosine: number;
+  final: number;
+  usage_count: number;
+  conditional_count: number;
+  usage_boost: number;
+  recency_boost: number;
+}>> => {
+  const auditEntries = await opts.bank.listAudit({});
+  const audits = auditEntries.filter((e): e is AuditEntry & { intent: string } =>
+    typeof e.intent === "string" && e.intent.length > 0,
+  );
+
+  // Cold start: no audit data with intents → behaves like cosine-only
+  if (audits.length === 0) {
+    return applicable.map(({ skill, score }) => ({
+      skill,
+      cosine: score,
+      final: score,
+      usage_count: 0,
+      conditional_count: 0,
+      usage_boost: 0,
+      recency_boost: 0,
+    }));
+  }
+
+  // Build intent embedding cache
+  const cachePath = join(opts.bank.root, "intent-embeddings.json");
+  const cache = new IntentEmbeddingCache(cachePath, opts.embedder);
+
+  // Embed all unique intents (cached). One batch.
+  const uniqueIntents = Array.from(new Set(audits.map((e) => e.intent)));
+  const embeddings = await cache.embedBatch(uniqueIntents);
+
+  // Build per-skill intent map
+  const perSkillIntents: SkillIntentMap = new Map();
+  for (const audit of audits) {
+    const vec = embeddings.get(audit.intent);
+    if (vec === undefined) continue;
+    const arr = perSkillIntents.get(audit.skill_id) ?? [];
+    arr.push({ intent: audit.intent, vec, timestamp: audit.timestamp });
+    perSkillIntents.set(audit.skill_id, arr);
+  }
+
+  const reranked = intentConditionalRerank(
+    applicable.map(({ skill, score }) => ({ skill_id: skill.identity, cosine: score })),
+    queryEmbedding,
+    perSkillIntents,
+    opts.rerankConfig ?? {},
+  );
+
+  const skillById = new Map(applicable.map(({ skill }) => [skill.identity, skill]));
+  return reranked.map((r) => ({
+    skill: skillById.get(r.skill_id) as IndexedSkill,
+    cosine: r.cosine,
+    final: r.final_score,
+    usage_count: r.usage_count,
+    conditional_count: r.conditional_count,
+    usage_boost: r.usage_boost,
+    recency_boost: r.recency_boost,
+  }));
 };
 
 export const printQueryResult = (result: QueryResult, asJson: boolean): void => {
@@ -188,7 +323,7 @@ export const printQueryResult = (result: QueryResult, asJson: boolean): void => 
   process.stdout.write(`Top ${result.hits.length} skills for: "${result.intent}"\n`);
   process.stdout.write(`Embedding: ${result.embedding_model}`);
   const flags: string[] = [];
-  if (result.rerank_applied) flags.push("rerank");
+  if (result.rerank_mode !== "none") flags.push(`rerank=${result.rerank_mode}`);
   if (result.filter_applied) flags.push("filter");
   if (flags.length > 0) process.stdout.write(` | ${flags.join(" + ")}`);
   process.stdout.write("\n\n");
@@ -209,10 +344,13 @@ export const printQueryResult = (result: QueryResult, asJson: boolean): void => 
     process.stdout.write(`${i + 1}. [${hit.score.toFixed(3)}] ${hit.identity}\n`);
     process.stdout.write(`   Title: ${hit.title}\n`);
     process.stdout.write(`   Use when: ${hit.use_when}\n`);
-    if (result.rerank_applied && (hit.usage_count > 0 || hit.recency_boost > 0)) {
+    if (result.rerank_mode !== "none" && (hit.usage_count > 0 || hit.recency_boost > 0)) {
+      const countLabel = result.rerank_mode === "intent-conditional"
+        ? `n_relevant=${hit.conditional_count ?? 0}/${hit.usage_count}`
+        : `n=${hit.usage_count}`;
       process.stdout.write(
         `   Score breakdown: cosine=${hit.cosine.toFixed(3)} ` +
-          `+ usage=${hit.usage_boost.toFixed(3)} (n=${hit.usage_count}) ` +
+          `+ usage=${hit.usage_boost.toFixed(3)} (${countLabel}) ` +
           `+ recency=${hit.recency_boost.toFixed(3)}\n`,
       );
     }

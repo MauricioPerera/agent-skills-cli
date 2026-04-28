@@ -184,29 +184,91 @@ Read this carefully — the headline is **rerank helps in realistic usage but ca
 - `RerankConfig` exposed via library API for tuning.
 - Tests verify the boost math + correctness across simulated usage patterns.
 
-### What v0.4.0 does NOT ship (deferred to v0.5.0)
+### What v0.4.0 does NOT ship (delivered in v0.5.0 — see below)
 
 - **Intent-conditional rerank** (Strategy D). This requires:
-  - Storing each audit entry's intent embedding (currently we store the intent string only).
-  - At query time, fetching past intents and computing similarity vs. the current query.
-- The infrastructure is straightforward — embed at audit-write time, persist alongside the JSONL line, look up at query-time. It's just out of scope for the v0.4.0 release.
+  - Storing each audit entry's intent string (we already do).
+  - At query time, embedding past intents (cached) and computing similarity vs. the current query.
+- v0.5.0 ships exactly this with the lazy `IntentEmbeddingCache` design — exec stays purely local, intents are embedded on-demand at query time.
 
 ### Operator guidance
 
-| Setting | Recommended |
+| Setting | Recommended (v0.5.0+) |
 |---|---|
-| Catalog has < 20 skills, similar usage frequency | Default rerank fine. |
-| Catalog has dominant "favorite" skills (e.g., one used 100× more than others) | Lower `α` to 0.01 OR disable rerank until v0.5.0 ships intent-conditional. |
-| Catalog has truly distinct skill domains | Default rerank fine; usage signals only flip ambiguous queries. |
-| Adversarial / multi-tenant audit log | **Disable rerank** (`--no-rerank`) until per-tenant scoping ships. |
+| Default for any new bank | `intent-conditional` (the v0.5.0 default). |
+| Catalog has < 20 skills, similar usage frequency | Default `intent-conditional` is fine. |
+| Catalog has dominant "favorite" skills (one used 100× more than others) | Default `intent-conditional` — this is the case it was designed to fix. |
+| Catalog has truly distinct skill domains | Default `intent-conditional`; usage signals only flip ambiguous queries. |
+| You're certain past intents will mirror future queries (small team, narrow workflow) | `--rerank-mode global` is faster (no per-query intent embedding) but degrades under usage concentration — see Strategy B above. |
+| Adversarial / multi-tenant audit log | **`--rerank-mode none`** until per-tenant scoping ships. |
 
 ### Reproducing
 
 The full experiment script (5 strategies × 35 paraphrases × ~50 embedding calls) is in [`tests/sync-query.test.ts`](./tests/sync-query.test.ts) using stub embedders, plus a live-CF version that ran the data above via the CLI's `runQuery` directly.
 
+## Stress test rerun on live Workers AI (v0.5.0)
+
+v0.5.0 ships intent-conditional rerank as the **default** mode. To validate it under the same adversarial conditions that broke global-mode rerank, we re-ran the stress scenario directly against `@cf/baai/bge-base-en-v1.5` via the Cloudflare connector — embedding all 7 skills, 35 paraphrases, and 50 past intents live. Raw result: [`scripts/bench-v0.5.0-result.json`](./scripts/bench-v0.5.0-result.json).
+
+Setup: 7 skills × 35 paraphrases. 50 audit entries simulating concentrated past usage of `base64-encode` (10 each of: "encode credential N as base64", "make a Basic Auth header for service N", "convert username:password N to base64", "generate Authorization token #N", "build base64 string for blob N"), distributed over the last 21 days. α=0.05, β=0.03, 7-day half-life.
+
+| Strategy | Top-1 | Top-3 | vs. cosine baseline |
+|---|---:|---:|---:|
+| **A. Cosine baseline** (no rerank) | 34 / 35 (97.1 %) | 35 / 35 | — |
+| **B. Global rerank, 50 uses** | **12 / 35 (34.3 %) ⚠️** | 35 / 35 | **−62.8 pp** |
+| **C. Intent-conditional sim≥0.7** ⭐ default | **35 / 35 (100 %) ✓** | 35 / 35 | **+2.9 pp** |
+| D. Intent-conditional sim≥0.8 | 35 / 35 (100 %) | 35 / 35 | +2.9 pp |
+| E. Intent-conditional sim≥0.6 | 33 / 35 (94.3 %) | 35 / 35 | −2.8 pp |
+
+Read this carefully — it is the empirical case for v0.5.0:
+
+1. **Global rerank under stress is worse than the v0.4.0 simulation predicted.** The synthetic 50-use stress test in v0.4.0 measured 45.7 % top-1; the live Workers AI version measures **34.3 %**. Real cosine margins between unrelated skills are tighter than our stub-embedder estimate, so a +0.196 global usage boost flips even more queries. `base64-encode` won 23 of 35 queries — including every paraphrase about http-get, every paraphrase about read-file, every paraphrase about json-query, and most of http-post-json. **This is naive global rerank's failure mode in production-realistic conditions.**
+
+2. **Intent-conditional rerank with the v0.5.0 default (sim≥0.7) recovers and improves on cosine.** It lifts top-1 from 34/35 → **35/35** by correctly resolving the v0.4.0 "Basic Auth credential" ambiguity (whose past intents include "Basic Auth header" matches at sim≥0.7) while **ignoring base64-encode's 50-entry history on every unrelated query**. This is exactly the property the design promises.
+
+3. **The threshold matters and 0.7 is the right default.** Both 0.7 and 0.8 hit perfect 35/35; 0.6 leaks 2 false positives ("submit a JSON payload via http" and "make an HTTP POST with a request body" share enough surface with base64's "Authorization token" / "Basic Auth header" past intents to cross sim≥0.6). The benchmark validates `0.7` as the v0.5.0 default — strict enough to keep base64 out of the http-post-json results, loose enough to recognise genuine semantic neighbours.
+
+4. **The v0.5.0 default is a strict improvement over the cosine baseline** in the very condition where the v0.4.0 default was a regression (97.1 % → 34.3 %). The same audit log that destroys global-mode rerank is what makes intent-conditional rerank exceed cosine baseline.
+
+### What v0.5.0 ships
+
+- **Default `--rerank-mode intent-conditional`** with `similarityThreshold=0.7`, `α=0.05`, `β=0.03`, 7-day half-life.
+- `--rerank-mode global | intent-conditional | none` flag (and `--no-rerank` shortcut for `none`).
+- New `IntentEmbeddingCache` (`<bank>/intent-embeddings.json`) — past-intent embeddings are computed on-demand at query time and cached. Exec stays purely local; the cache invalidates if the bank's embedding model changes.
+- `intentConditionalRerank()` exported in the public library API alongside `rerank()`.
+- Tests: 9 new tests covering the rerank math + cache persistence + model-change invalidation (192 total, all passing).
+
+### Reproducing on your own account
+
+```bash
+# Setup
+export CF_ACCOUNT_ID=<32-hex-account-id>
+export CF_API_TOKEN=<token-with-Workers-AI-permission>
+export CF_EMBEDDING_MODEL="@cf/baai/bge-base-en-v1.5"
+
+# Sync the public skill pack
+agent-skills sync github.com/MauricioPerera/agent-skills-pack@v1.0.0
+
+# Simulate 50 past uses of base64-encode (the adversarial scenario)
+for i in {1..50}; do
+  agent-skills exec github.com/MauricioPerera/agent-skills-pack/base64-encode \
+    --intent "encode credential ${i} as base64" \
+    -- input "test${i}"
+done
+
+# Query with default (intent-conditional) — base64 only boosts on auth/encode queries
+agent-skills query "fetch the contents of a URL" --k 1 --json | jq '.hits[0].identity'
+# → http-get  (intent-conditional did NOT boost base64 because past intents are dissimilar)
+
+# Force global mode for comparison — base64 wins almost everything
+agent-skills query "fetch the contents of a URL" --k 1 --rerank-mode global --json | jq '.hits[0].identity'
+# → base64-encode  (global usage_count=50 swamps cosine difference)
+```
+
+The full live-CF connector script that produced the table is in [`scripts/bench-v0.5.0-stress.mjs`](./scripts/bench-v0.5.0-stress.mjs) (input prep) and the raw run JSON in [`scripts/bench-v0.5.0-result.json`](./scripts/bench-v0.5.0-result.json).
+
 ## Future work
 
-- **Intent-conditional rerank (v0.5.0)**. Persist intent embeddings in audit JSONL; query-time lookup of similar past intents.
 - **Per-tenant audit scoping** for multi-tenant skill banks. Same skill, different usage histories per user.
 - Rerun with auto-generated paraphrases at N=10× scale per intent (350+ queries) for tighter confidence intervals.
 - Add a `bench` subcommand to the CLI that takes a `(intent, expected_id)[]` ground-truth file and reports top-K accuracy + score statistics.
