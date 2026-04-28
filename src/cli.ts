@@ -12,6 +12,7 @@ import { printBenchResult, runBench } from "./commands/bench.js";
 import { printPublishResult, runPublish } from "./commands/publish.js";
 import { printInitResult, runInit } from "./commands/init.js";
 import { printUpdateResult, runUpdate } from "./commands/update.js";
+import { parseArgv, parseRerankMode } from "./lib/cli-args.js";
 
 const VERSION = "0.11.0";
 
@@ -143,61 +144,6 @@ Exit codes:
 
 Spec: https://github.com/MauricioPerera/agent-skills
 `;
-
-interface Argv {
-  positional: string[];
-  flags: Map<string, string | boolean>;
-}
-
-const parseArgv = (argv: readonly string[]): Argv => {
-  const positional: string[] = [];
-  const flags = new Map<string, string | boolean>();
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i] as string;
-    if (tok.startsWith("--")) {
-      const eq = tok.indexOf("=");
-      if (eq !== -1) {
-        flags.set(tok.slice(2, eq), tok.slice(eq + 1));
-        continue;
-      }
-      const name = tok.slice(2);
-      const next = argv[i + 1];
-      if (next === undefined || next.startsWith("--")) {
-        flags.set(name, true);
-      } else {
-        flags.set(name, next);
-        i++;
-      }
-      continue;
-    }
-    positional.push(tok);
-  }
-  return { positional, flags };
-};
-
-/**
- * Parse the rerank-mode selection from CLI flags. `--no-rerank` always wins
- * over `--rerank-mode` (a more conservative posture for an opt-out flag).
- * Used by both `query` and `bench`.
- */
-const parseRerankMode = (
-  args: Argv,
-): "global" | "intent-conditional" | "none" => {
-  let mode: "global" | "intent-conditional" | "none" = "intent-conditional";
-  const flag = args.flags.get("rerank-mode");
-  if (typeof flag === "string") {
-    if (flag === "global" || flag === "intent-conditional" || flag === "none") {
-      mode = flag;
-    } else {
-      throw new CliError(
-        EXIT.USAGE,
-        `--rerank-mode must be one of: intent-conditional | global | none`,
-      );
-    }
-  }
-  if (args.flags.get("no-rerank") === true) mode = "none";
-  return mode;
-};
 
 const main = async (): Promise<void> => {
   const args = parseArgv(process.argv.slice(2));
