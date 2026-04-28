@@ -9,7 +9,7 @@ import { runSync } from "./commands/sync.js";
 import { printQueryResult, runQuery } from "./commands/query.js";
 import { printExecResult, runExec } from "./commands/exec.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -48,6 +48,8 @@ Flags (per command):
   --intent "<text>"     (exec) Record this intent in the audit entry.
   --limit N             (audit) Max entries to print. Default 20.
   --skill <id>          (audit) Filter to one skill identity.
+  --no-rerank           (query) Disable audit-based re-rank. Default: rerank ON.
+  --no-filter           (query) Disable applicable_when filtering. Default: filter ON.
 
 Cloudflare Workers AI environment (for sync + query):
   CF_ACCOUNT_ID         Your Cloudflare account ID (32 hex chars).
@@ -257,12 +259,21 @@ const main = async (): Promise<void> => {
     }
     const kFlag = args.flags.get("k");
     const k = typeof kFlag === "string" ? Number(kFlag) : undefined;
+    const noRerank = args.flags.get("no-rerank") === true;
+    const noFilter = args.flags.get("no-filter") === true;
     const embedder = createCloudflareEmbedder({
       accountId: accountId as string,
       apiToken: apiToken as string,
       model: embeddingModel,
     });
-    const result = await runQuery({ intent, k, bank, embedder });
+    const result = await runQuery({
+      intent,
+      k,
+      bank,
+      embedder,
+      rerank: !noRerank,
+      filterApplicable: !noFilter,
+    });
     printQueryResult(result, asJson);
     process.exit(EXIT.OK);
   }

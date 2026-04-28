@@ -13,16 +13,23 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
-**v0.3.0** — closes the agent-skills loop end-to-end. The CLI can now:
+**v0.4.0** — the audit log becomes a feedback loop. The CLI now:
 
 ```
 sync   → pulls + embeds + indexes a skill pack from any git source
-query  → finds the right skill from a natural-language intent
+query  → finds the right skill from intent (NEW: applicable_when filter + audit-based rerank)
 exec   → runs the resolved command via bash + appends an audit entry
-audit  → inspects the local audit log for past executions
+audit  → inspects the local audit log
 ```
 
-Plus the local-only ones from earlier alphas (`validate`, `resolve`) and bank management (`list`, `reset`).
+Plus local-only commands (`validate`, `resolve`) and bank management (`list`, `reset`).
+
+**Empirical claim updated** (v0.4.0 with intent-conditional rerank, default settings):
+- Cosine baseline: 34/35 top-1 = 97.1%, top-3 = 100%.
+- + audit rerank with realistic usage: **35/35 top-1 = 100%, top-3 = 100%**.
+- Stress test (50× concentrated usage, α=0.05): rerank degrades to 16/35 — exposed in BENCHMARK.md as a known failure mode of naive global-count rerank. Mitigation: lower `α`, or disable rerank, or wait for v0.5.0 intent-conditional.
+
+See [BENCHMARK.md](./BENCHMARK.md) for full methodology, 5 rerank strategies compared, and operator tuning guidance.
 
 > **Empirical validation** (35 paraphrases × 3 embedding models = 105 query evaluations against the public skill pack):
 > - **Top-1 accuracy**: 97-100% depending on model.

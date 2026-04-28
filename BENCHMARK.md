@@ -153,8 +153,61 @@ The CLI's logic (resolve → fetch → parse → validate → embed → store �
 - **English-centric.** All 7 skills' SKILL.md files are in English. For multilingual corpora, evaluate bge-m3 with non-English paraphrases.
 - **No re-ranking signal tested.** This benchmark used pure cosine; production banks would layer re-rank by usage_count / avg_rating / applicable_when. Those signals improve quality further; this benchmark establishes the floor.
 
+## Rerank effect (v0.4.0)
+
+v0.4.0 introduces audit-based rerank: after the cosine search, the bank optionally adds a usage-count + recency boost. The intuition is that the right tool for a given intent should rank higher *the more times the agent has used it for similar past intents*.
+
+To validate this, we re-ran the same 35-paraphrase corpus with simulated audit history. Five strategies tested:
+
+| Strategy | Setup | Top-1 | Top-3 |
+|---|---|---:|---:|
+| **A. Cosine baseline** | no rerank | 34 / 35 (97.1 %) | 35 / 35 |
+| **B. Global usage** | 5 past uses of base64-encode, α=0.05, β=0 | **35 / 35 (100 %)** | 35 / 35 |
+| **C. Global usage, gentle** | same 5 uses, α=0.01 | 34 / 35 (97.1 %) | 35 / 35 |
+| **D. Intent-conditional (sim ≥ 0.7)** | 5 past intents, only count uses with similar intent | **35 / 35 (100 %)** | 35 / 35 |
+| **E. Intent-conditional (sim ≥ 0.8)** | stricter similarity threshold | 34 / 35 (97.1 %) | 35 / 35 |
+| **(stress test)** | **50** global uses on base64, α=0.05 | **16 / 35 (45.7 %) ⚠️** | 35 / 35 |
+
+Read this carefully — the headline is **rerank helps in realistic usage but can hurt under extreme concentration**:
+
+1. **Strategy A** (baseline) already has 100 % top-3 recall. Rerank's job is to lift top-1.
+2. **Strategy B** demonstrates the ideal case: a small, realistic amount of usage history is enough to resolve the genuine semantic-ambiguity edge case ("make a Basic Auth credential" → base64-encode rather than github-issue-create).
+3. **Strategy C** (gentler α) doesn't lift enough; the boost (+0.018 from 5 uses at α=0.01) is below the +0.041 cosine gap that needs to flip.
+4. **Strategy D** (intent-conditional) achieves 100 % top-1 *more safely*: only past-intent vectors that are semantically close to the current query contribute to the boost. This protects against the adversarial case below.
+5. **Strategy E** (stricter threshold) is too restrictive — past intents don't cluster tightly enough at sim ≥ 0.8 to provide signal.
+6. **Stress test**: with 50 global uses of one skill and α=0.05, the boost (+0.196) overwhelms cosine and base64-encode wins everything — including queries about HTTP, file reads, JSON, etc. **This is a real failure mode of naive global-count rerank.**
+
+### What v0.4.0 ships
+
+- Default `rerank: true` with `α=0.05`, `β=0.03` (recency, 7-day half-life).
+- `--no-rerank` flag to disable.
+- `RerankConfig` exposed via library API for tuning.
+- Tests verify the boost math + correctness across simulated usage patterns.
+
+### What v0.4.0 does NOT ship (deferred to v0.5.0)
+
+- **Intent-conditional rerank** (Strategy D). This requires:
+  - Storing each audit entry's intent embedding (currently we store the intent string only).
+  - At query time, fetching past intents and computing similarity vs. the current query.
+- The infrastructure is straightforward — embed at audit-write time, persist alongside the JSONL line, look up at query-time. It's just out of scope for the v0.4.0 release.
+
+### Operator guidance
+
+| Setting | Recommended |
+|---|---|
+| Catalog has < 20 skills, similar usage frequency | Default rerank fine. |
+| Catalog has dominant "favorite" skills (e.g., one used 100× more than others) | Lower `α` to 0.01 OR disable rerank until v0.5.0 ships intent-conditional. |
+| Catalog has truly distinct skill domains | Default rerank fine; usage signals only flip ambiguous queries. |
+| Adversarial / multi-tenant audit log | **Disable rerank** (`--no-rerank`) until per-tenant scoping ships. |
+
+### Reproducing
+
+The full experiment script (5 strategies × 35 paraphrases × ~50 embedding calls) is in [`tests/sync-query.test.ts`](./tests/sync-query.test.ts) using stub embedders, plus a live-CF version that ran the data above via the CLI's `runQuery` directly.
+
 ## Future work
 
+- **Intent-conditional rerank (v0.5.0)**. Persist intent embeddings in audit JSONL; query-time lookup of similar past intents.
+- **Per-tenant audit scoping** for multi-tenant skill banks. Same skill, different usage histories per user.
 - Rerun with auto-generated paraphrases at N=10× scale per intent (350+ queries) for tighter confidence intervals.
 - Add a `bench` subcommand to the CLI that takes a `(intent, expected_id)[]` ground-truth file and reports top-K accuracy + score statistics.
 - Compare brute-force cosine vs IVF-style ANN search at 1K / 10K / 100K skill scale (the spec explicitly calls out IVF as the swap-in for FileBank when catalogs grow).

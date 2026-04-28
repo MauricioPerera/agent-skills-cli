@@ -42,6 +42,21 @@ export {
 } from "./lib/embed.js";
 export type { EmbeddingProvider, CloudflareEmbedderConfig } from "./lib/embed.js";
 
+// Rerank + applicable filter (v0.4.0)
+export { aggregateUsage, rerank, computeRecency } from "./lib/rerank.js";
+export type {
+  RerankConfig,
+  SkillUsageStats,
+  RerankInput,
+  RerankOutput,
+} from "./lib/rerank.js";
+export {
+  detectHost,
+  detectAvailableCommands,
+  checkApplicability,
+} from "./lib/applicable.js";
+export type { HostContext, ApplicabilityResult } from "./lib/applicable.js";
+
 // File-based skill bank
 export { FileBank, defaultBankRoot } from "./lib/bank.js";
 export type {
