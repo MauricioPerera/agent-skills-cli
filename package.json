@@ -1,8 +1,7 @@
 {
-  "name": "agent-skills-cli",
-  "version": "0.17.1",
-  "private": true,
-  "description": "Reference CLI for the agent-skills specification: validate, sync, query, resolve, and exec skills end-to-end with audit log + Cloudflare Workers AI embeddings. NOT PUBLISHED TO NPM until v1.0 — install via GitHub release.",
+  "name": "@mauricioperera/agent-skills-cli",
+  "version": "0.18.0",
+  "description": "Reference CLI for the agent-skills specification: validate, sync, query, resolve, and exec skills end-to-end with audit log + Cloudflare Workers AI / Ollama / OpenAI embeddings. Pre-1.0 (API may evolve); install from npm or GitHub release.",
   "license": "MIT",
   "author": "Mauricio Perera",
   "repository": {
@@ -33,12 +32,16 @@
     }
   },
   "files": ["dist", "schemas"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "ajv": "^8.17.1",

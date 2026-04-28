@@ -169,31 +169,37 @@ Full methodology, all 5 strategies compared, failure breakdowns, and operator tu
 
 ## Install
 
-> **Pre-1.0: GitHub-only distribution.** This CLI is not published to npm yet — the `agent-skills-cli` name on the npm registry is held by an unrelated package. Install from the GitHub release until the spec and library API stabilize at v1.0.
+```bash
+# Global CLI — exposes `agent-skills` on your PATH
+npm install -g @mauricioperera/agent-skills-cli
+
+# Or as a project library
+npm install @mauricioperera/agent-skills-cli
+```
+
+> **Pre-1.0 stability note.** API and CLI surface are evolving until v1.0. Pin a specific version in CI / production. The `@mauricioperera/` scope is the canonical home until v1.0 — the unscoped `agent-skills-cli` name on npm is held by an unrelated project.
+
+### Or install from a GitHub release tag
+
+For air-gapped environments, or to track main directly:
 
 ```bash
-# Clone a tagged release
-git clone --depth 1 --branch v0.13.1 https://github.com/MauricioPerera/agent-skills-cli
+git clone --depth 1 --branch v0.18.0 https://github.com/MauricioPerera/agent-skills-cli
 cd agent-skills-cli
 npm install
 npm run build
 npm link            # exposes `agent-skills` on your PATH
-
-# Or run from the checkout without linking
-node dist/cli.js validate skills/x/SKILL.md
 ```
 
-To use the library programmatically without `npm link`, install the local checkout into your project:
-
-```bash
-npm install /path/to/agent-skills-cli
-```
-
-The CLI will be published to npm once the public API is frozen at v1.0. Until then, pin to a tagged commit in `package.json`:
+Or pin a specific commit in your `package.json`:
 
 ```json
-"agent-skills-cli": "github:MauricioPerera/agent-skills-cli#v0.13.1"
+"@mauricioperera/agent-skills-cli": "github:MauricioPerera/agent-skills-cli#v0.18.0"
 ```
+
+### Publishing your own skills?
+
+Walk-through with concrete example: **[PUBLISHING.md](./PUBLISHING.md)** — scaffold to public release in 20–30 minutes, including the privacy invariant.
 
 ## End-to-end demo
 
@@ -645,9 +651,10 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.15.0 | shipped | + SSH-tag detection (`-----BEGIN SSH SIGNATURE-----` → `"ssh"`) — fixes a v0.14 oversight. Spec patch v0.3.2: documents the **Sigstore-on-host trap** |
 | v0.16.0 | shipped | + Sigstore identity extraction: hand-rolled CMS/ASN.1 walker pulls the OIDC subject from the Fulcio cert's SAN and the issuer from extension `1.3.6.1.4.1.57264.1.1` (`/.1.8`). Surfaced as `provenance.signature_identity = { subject, subject_type, issuer }`. Zero new deps. Cross-impl parity validated against the real `sigstore/gitsign@v0.14.0` payload. Spec patch v0.3.3 |
 | v0.17.0 | shipped | + Rekor entry parsing + public-instance pinning + lookup by UUID (`parseRekorEntry`, `fetchRekorEntry`, `RekorEntry` types). Real fixture committed for offline testing. Spec patch v0.4.0: formalizes the Level 4 verification *contract* (§5.4) — what banks must do, not how |
-| **v0.17.1** | **shipped** | + `computeGitsignRekorLookupHash` (CMS SignerInfo.SignedAttrs marshaled-for-verification per RFC 5652 §5.4 / gitsign source) + `findRekorEntryByHash` wrapper for Rekor's `index/retrieve`. Validated structurally via the messageDigest invariant. Spec v0.4.1 §5.4.2 step 3 codifies the framing math + the Rekor shard-rotation caveat. **Still no crypto verification** — paves the input plumbing for v0.18 |
-| v0.18.0+ | planned | Phase 2 of Level 4: full verification (Merkle inclusion-proof math + Rekor checkpoint signature + Fulcio cert chain + identity matching). Probe results recorded for the dep decision: `@sigstore/verify` is 852KB / 4 packages clean tree (manageable), but takes Sigstore Bundle inputs not git CMS — gitsign-specific bridge work needed either way. Hand-roll vs dep is now a meaningful, evidence-based choice |
-| v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
+| v0.17.1 | shipped | + `computeGitsignRekorLookupHash` (CMS SignerInfo.SignedAttrs marshaled-for-verification per RFC 5652 §5.4 / gitsign source) + `findRekorEntryByHash` wrapper for Rekor's `index/retrieve`. Validated structurally via the messageDigest invariant. Spec v0.4.1 §5.4.2 step 3 codifies the framing math + the Rekor shard-rotation caveat |
+| **v0.18.0** | **shipped** | **First npm publication** as `@mauricioperera/agent-skills-cli`. Removes the install friction (`git clone && npm link` → `npm install -g`). Adoption blocker resolved without waiting for v1.0. No code changes vs v0.17.1; pure distribution release |
+| v0.18.x+ | planned | Rekor inclusion-proof verification (Phase 2 of Level 4). Probe in v0.18 dev caught that `@sigstore/verify`'s own `verifyMerkleInclusion` fails 0/5 against fresh real Rekor entries — the textbook RFC 6962 leaf framing doesn't match what the current Rekor tree actually uses. Investigation prerequisite: identify the real leaf framing (likely Rekor v2 proto-encoded leaf with metadata, not raw body bytes). Filed upstream so the community sees the finding |
+| v1.0.0 | planned | IVF-style ANN backend; stable API freeze |
 
 ## Continuous validation
 

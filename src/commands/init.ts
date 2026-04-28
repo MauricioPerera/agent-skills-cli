@@ -257,16 +257,12 @@ jobs:
         with:
           node-version: "22"
 
-      # Until agent-skills-cli is on npm, install from a tagged release.
+      # Pin to a known-good CLI version; bump intentionally on review.
       - name: Install agent-skills CLI
-        run: |
-          git clone --depth 1 --branch v0.13.1 https://github.com/MauricioPerera/agent-skills-cli /tmp/cli
-          cd /tmp/cli && npm ci && npm run build && npm link
+        run: npm install -g @mauricioperera/agent-skills-cli@0.18.0
 
       - name: Validate every SKILL.md and confirm skills-index.json is up-to-date
-        run: |
-          cd \$GITHUB_WORKSPACE
-          agent-skills publish --check-only
+        run: agent-skills publish --check-only
         # Exit 5 if any SKILL.md is invalid; exit 0 even on a clean no-op.
         # Add --json | jq for richer CI output if needed.
 
@@ -283,8 +279,7 @@ jobs:
   #         CF_ACCOUNT_ID: \${{ secrets.CF_ACCOUNT_ID }}
   #         CF_API_TOKEN: \${{ secrets.CF_API_TOKEN }}
   #       run: |
-  #         git clone --depth 1 --branch v0.8.0 https://github.com/MauricioPerera/agent-skills-cli /tmp/cli
-  #         cd /tmp/cli && npm ci && npm run build && npm link
+  #         npm install -g @mauricioperera/agent-skills-cli@0.18.0
   #         agent-skills sync github.com/\${{ github.repository }}@\${{ github.sha }}
   #         agent-skills bench bench-truth.jsonl
 `;
