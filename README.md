@@ -2,8 +2,8 @@
 
 > Reference CLI + library for the [agent-skills specification](https://github.com/MauricioPerera/agent-skills).
 
-[![npm](https://img.shields.io/npm/v/agent-skills-cli.svg)](https://www.npmjs.com/package/agent-skills-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/MauricioPerera/agent-skills-cli?label=release)](https://github.com/MauricioPerera/agent-skills-cli/releases)
 
 ## What this is
 
@@ -40,10 +40,30 @@ Full methodology, all 5 strategies compared, failure breakdowns, and operator tu
 
 ## Install
 
+> **Pre-1.0: GitHub-only distribution.** This CLI is not published to npm yet — the `agent-skills-cli` name on the npm registry is held by an unrelated package. Install from the GitHub release until the spec and library API stabilize at v1.0.
+
 ```bash
-npm i -g agent-skills-cli
-# or, no install
-npx agent-skills-cli validate skills/x/SKILL.md
+# Clone a tagged release
+git clone --depth 1 --branch v0.5.0 https://github.com/MauricioPerera/agent-skills-cli
+cd agent-skills-cli
+npm install
+npm run build
+npm link            # exposes `agent-skills` on your PATH
+
+# Or run from the checkout without linking
+node dist/cli.js validate skills/x/SKILL.md
+```
+
+To use the library programmatically without `npm link`, install the local checkout into your project:
+
+```bash
+npm install /path/to/agent-skills-cli
+```
+
+The CLI will be published to npm once the public API is frozen at v1.0. Until then, pin to a tagged commit in `package.json`:
+
+```json
+"agent-skills-cli": "github:MauricioPerera/agent-skills-cli#v0.5.0"
 ```
 
 ## End-to-end demo (with Cloudflare Workers AI)
@@ -245,14 +265,6 @@ const urls = deriveUrls(id);
 
 Full type definitions are exported. See `src/types.ts`.
 
-## Update version of package.json
-
-Make sure your dependency line uses the published version:
-
-```json
-"agent-skills-cli": "^0.2.0"
-```
-
 ## Roadmap
 
 | Version | Status | Scope |
@@ -265,7 +277,7 @@ Make sure your dependency line uses the published version:
 | v0.6.0 | planned | `publish` (skill author tooling); multi-provider embeddings (Ollama, OpenAI, generic HTTP) |
 | v0.7.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
 | v0.8.0 | planned | IVF-style ANN backend (swap-in for FileBank when catalog grows) |
-| v1.0.0 | planned | Stable API + full SPEC v1.0 coverage |
+| v1.0.0 | planned | Stable API + full SPEC v1.0 coverage; **first npm publication** (under a final, owned name — current `agent-skills-cli` on npm is an unrelated squat) |
 
 ## Sister projects
 

@@ -1,7 +1,8 @@
 {
   "name": "agent-skills-cli",
   "version": "0.5.0",
-  "description": "Reference CLI for the agent-skills specification: validate, sync, query, resolve, and exec skills end-to-end with audit log + Cloudflare Workers AI embeddings.",
+  "private": true,
+  "description": "Reference CLI for the agent-skills specification: validate, sync, query, resolve, and exec skills end-to-end with audit log + Cloudflare Workers AI embeddings. NOT PUBLISHED TO NPM until v1.0 — install via GitHub release.",
   "license": "MIT",
   "author": "Mauricio Perera",
   "repository": {
