@@ -172,6 +172,21 @@ export class FileBank {
    */
   private skillsCache: IndexedSkill[] | null = null;
 
+  /**
+   * In-memory cache for the audit log (v0.13.1+). Same instance-scoped
+   * pattern as skillsCache. Holds the parsed audit set in FILE order
+   * (oldest-first); listAudit applies filters, reverses to newest-first,
+   * and slices on each call — the expensive parse work happens once per
+   * cache miss.
+   *
+   * appendAudit appends to the cache rather than invalidating, so the
+   * common "exec → next query reads audit" path stays O(1) after the
+   * initial cache fill. reset() drops the cache.
+   *
+   * Per-instance, no TTL — same caveats as skillsCache.
+   */
+  private auditCacheAll: AuditEntry[] | null = null;
+
   constructor(config: BankConfig = {}) {
     this.rootDir = config.rootDir ?? defaultBankRoot();
     this.skillsDir = join(this.rootDir, "skills");
@@ -435,37 +450,63 @@ export class FileBank {
     await this.ensureDir();
     const line = JSON.stringify(entry) + "\n";
     await appendFile(this.auditPath, line, "utf8");
+    // If we have a cache, keep it in sync rather than invalidating: the
+    // exec → next query path is the common case and benefits from O(1)
+    // append. If the cache is null, leave it null — next listAudit will
+    // build it fresh. (Don't fill the cache here on cold paths; that's
+    // listAudit's responsibility.)
+    if (this.auditCacheAll !== null) {
+      this.auditCacheAll.push(entry);
+    }
   }
 
   /**
    * Read recent audit entries, optionally filtered by skill_id. Returns the
    * MOST RECENT first (newest at index 0).
+   *
+   * Caching (v0.13.1+): the parsed audit log is cached in file order on
+   * the FileBank instance. Filters / reverse / slice run on every call
+   * but skip the parse + I/O work once the cache is warm. appendAudit
+   * extends the cache; reset drops it.
    */
   async listAudit(opts: { limit?: number; skill_id?: string } = {}): Promise<AuditEntry[]> {
-    let text: string;
-    try {
-      text = await readFile(this.auditPath, "utf8");
-    } catch (err) {
-      if (isMissing(err)) return []; // no audit log yet
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new CliError(
-        EXIT.RUNTIME,
-        `cannot read audit log at ${this.auditPath}: ${msg}`,
-      );
-    }
-    const lines = text.split("\n").filter((l) => l.length > 0);
-    const entries: AuditEntry[] = [];
-    for (const line of lines) {
+    let all = this.auditCacheAll;
+    if (all === null) {
+      let text: string;
       try {
-        const e = JSON.parse(line) as AuditEntry;
-        if (opts.skill_id !== undefined && e.skill_id !== opts.skill_id) continue;
-        entries.push(e);
-      } catch {
-        // skip corrupt lines (the whole point of JSONL is partial-failure resilience)
+        text = await readFile(this.auditPath, "utf8");
+      } catch (err) {
+        if (isMissing(err)) {
+          // No audit log yet. Cache the empty result so repeated cold
+          // calls don't keep re-attempting the read.
+          this.auditCacheAll = [];
+          return [];
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new CliError(
+          EXIT.RUNTIME,
+          `cannot read audit log at ${this.auditPath}: ${msg}`,
+        );
       }
+      const lines = text.split("\n").filter((l) => l.length > 0);
+      all = [];
+      for (const line of lines) {
+        try {
+          all.push(JSON.parse(line) as AuditEntry);
+        } catch {
+          // skip corrupt lines (the whole point of JSONL is partial-failure resilience)
+        }
+      }
+      this.auditCacheAll = all;
     }
-    entries.reverse(); // newest first
-    return opts.limit !== undefined ? entries.slice(0, opts.limit) : entries;
+
+    // Apply filters on the cached set.
+    const filtered = opts.skill_id !== undefined
+      ? all.filter((e) => e.skill_id === opts.skill_id)
+      : all.slice(); // copy so .reverse() doesn't mutate the cache
+
+    filtered.reverse(); // newest first
+    return opts.limit !== undefined ? filtered.slice(0, opts.limit) : filtered;
   }
 
   // ─── Reset ───────────────────────────────────────────────────────────
@@ -478,6 +519,7 @@ export class FileBank {
       // already gone
     }
     this.invalidateSkillsCache();
+    this.auditCacheAll = null;
   }
 
   /** Public accessor for the root directory (e.g., for CLI UX). */

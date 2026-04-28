@@ -224,6 +224,90 @@ describe("FileBank — listSkills caching (v0.13.0+)", () => {
   });
 });
 
+describe("FileBank — listAudit caching (v0.13.1+)", () => {
+  // Same instance-scoped pattern as listSkills cache. Append updates the
+  // cache rather than invalidating, since the exec → next-query cycle is
+  // the dominant access pattern.
+
+  const buildAudit = (overrides: Partial<AuditEntry> = {}): AuditEntry => ({
+    timestamp: new Date().toISOString(),
+    skill_id: "github.com/me/pack@a/echo",
+    args: { msg: "hi" },
+    exit_code: 0,
+    elapsed_ms: 10,
+    ...overrides,
+  });
+
+  it("returns the same set on repeated reads (cache hit)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.appendAudit(buildAudit({ timestamp: "2026-01-01T00:00:00Z" }));
+    const first = await bank.listAudit({});
+    const second = await bank.listAudit({});
+    expect(second).toEqual(first); // structural equality (not reference; we slice each time)
+    expect(first.length).toBe(1);
+  });
+
+  it("appendAudit extends the cache without invalidating", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.appendAudit(buildAudit({ timestamp: "2026-01-01T00:00:00Z", skill_id: "alpha" }));
+    const before = await bank.listAudit({}); // primes cache
+    expect(before.length).toBe(1);
+
+    await bank.appendAudit(buildAudit({ timestamp: "2026-01-02T00:00:00Z", skill_id: "bravo" }));
+    const after = await bank.listAudit({});
+    expect(after.length).toBe(2);
+    // newest-first ordering preserved
+    expect(after[0]?.skill_id).toBe("bravo");
+    expect(after[1]?.skill_id).toBe("alpha");
+  });
+
+  it("filters apply correctly on the cached set", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.appendAudit(buildAudit({ skill_id: "alpha" }));
+    await bank.appendAudit(buildAudit({ skill_id: "bravo" }));
+    await bank.appendAudit(buildAudit({ skill_id: "alpha" }));
+
+    const onlyAlpha = await bank.listAudit({ skill_id: "alpha" });
+    expect(onlyAlpha.length).toBe(2);
+    expect(onlyAlpha.every((e) => e.skill_id === "alpha")).toBe(true);
+
+    const limited = await bank.listAudit({ limit: 1 });
+    expect(limited.length).toBe(1);
+  });
+
+  it("cache reverse + slice does NOT mutate the underlying cache", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.appendAudit(buildAudit({ skill_id: "first" }));
+    await bank.appendAudit(buildAudit({ skill_id: "second" }));
+
+    // First call reverses + slices internally.
+    const a = await bank.listAudit({ limit: 1 });
+    expect(a[0]?.skill_id).toBe("second"); // newest first
+
+    // Second call must produce identical result (cache wasn't mutated by
+    // the reverse() in the previous call).
+    const b = await bank.listAudit({ limit: 1 });
+    expect(b[0]?.skill_id).toBe("second");
+  });
+
+  it("caches the empty result for an unsynced bank (no repeated readFile)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const first = await bank.listAudit({});
+    const second = await bank.listAudit({});
+    expect(first).toEqual([]);
+    expect(second).toEqual([]); // cached miss; no repeated ENOENT
+  });
+
+  it("reset() drops the audit cache", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    await bank.appendAudit(buildAudit({ skill_id: "alpha" }));
+    expect((await bank.listAudit({})).length).toBe(1);
+
+    await bank.reset();
+    expect((await bank.listAudit({})).length).toBe(0);
+  });
+});
+
 describe("FileBank — vector search", () => {
   it("returns top-K skills sorted by cosine similarity", async () => {
     const bank = new FileBank({ rootDir: tmpDir });
