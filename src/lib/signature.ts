@@ -39,24 +39,34 @@ import { CliError, EXIT } from "./errors.js";
 export type SignatureStatus = "valid" | "invalid" | "unsigned" | "unverified";
 
 /**
- * Cryptographic method used to sign the tag, when detectable (v0.14.0+).
+ * Cryptographic method used to sign the tag, when detectable.
  *
  *   - "gpg":      classic OpenPGP-armored signature ("-----BEGIN PGP SIGNATURE-----").
  *                 Trust comes from a long-lived key in the publisher's GitHub
  *                 account or a keyring on the verifier's side.
+ *   - "ssh":      SSH-formatted git signature ("-----BEGIN SSH SIGNATURE-----"),
+ *                 produced by `git config gpg.format ssh && git tag -s`. Trust
+ *                 comes from the SSH pubkey being attached to the publisher's
+ *                 GitHub account. Common in modern setups; many large projects
+ *                 (e.g. sigstore/cosign) sign tags this way. Added in v0.15.0.
  *   - "sigstore": gitsign-style CMS signature ("-----BEGIN SIGNED MESSAGE-----")
  *                 using a Fulcio-issued ephemeral cert + Rekor transparency log.
- *                 Detection is structural (PEM header), not full Level 4
- *                 verification — the Rekor inclusion proof is NOT verified
- *                 client-side in v0.14. That work is queued for v0.15+ and the
- *                 spec calls it Level 4. Today, a "sigstore"-method signature
- *                 with status "valid" means GitHub verified the cert chain
- *                 (Level 3a-equivalent trust, modulo Sigstore's identity model).
+ *                 Detection is structural (PEM header).
+ *
+ *                 ⚠ Sigstore-on-GitHub trap: GitHub validates the Fulcio cert
+ *                 at *lookup* time, not sign time. Fulcio certs are short-lived
+ *                 (10 minutes), so a properly-signed Sigstore tag will return
+ *                 status="invalid" reason="bad_cert" once the cert expires.
+ *                 The sound trust path for Sigstore is client-side Rekor
+ *                 inclusion-proof verification (spec §5.1 Level 4), which is
+ *                 NOT implemented client-side yet (queued for the next
+ *                 verification work). For now treat sigstore-method tags with
+ *                 reason="bad_cert" as ambiguous, not as forged.
  *
  * Undefined when the signature payload is absent (status == "unsigned" or
  * "unverified") or the format wasn't recognised.
  */
-export type SignatureMethod = "gpg" | "sigstore";
+export type SignatureMethod = "gpg" | "ssh" | "sigstore";
 
 export interface SignatureVerification {
   status: SignatureStatus;
@@ -69,16 +79,18 @@ export interface SignatureVerification {
 }
 
 /**
- * Inspect an OpenPGP-armored signature payload and detect whether it's a
- * traditional GPG signature or a gitsign/Sigstore CMS signature.
+ * Inspect an armored signature payload and detect which signing system the
+ * publisher used.
  *
- * The detection is structural: the PEM header itself differs.
- *   "-----BEGIN PGP SIGNATURE-----"   → GPG
- *   "-----BEGIN SIGNED MESSAGE-----"  → gitsign / Sigstore
+ * The detection is structural: each system uses a distinct PEM header.
+ *   "-----BEGIN PGP SIGNATURE-----"    → "gpg"      (OpenPGP)
+ *   "-----BEGIN SSH SIGNATURE-----"    → "ssh"      (git's SSH-format sigs)
+ *   "-----BEGIN SIGNED MESSAGE-----"   → "sigstore" (gitsign / CMS)
  *
  * This is robust (not a heuristic on payload contents) but NOT a verification.
  * It just tells you WHICH cryptographic system the publisher used. The
- * verification verdict comes from the host's API (status === "valid").
+ * verification verdict comes from the host's API (status === "valid"), modulo
+ * the Sigstore "bad_cert" trap documented on `SignatureMethod`.
  *
  * Returns undefined for unrecognised payloads (e.g., empty, malformed, or a
  * format we don't yet handle).
@@ -87,8 +99,9 @@ export const detectSignatureMethod = (
   signature: string | null | undefined,
 ): SignatureMethod | undefined => {
   if (typeof signature !== "string" || signature.length === 0) return undefined;
-  // Both PGP and CMS PEM markers are case-sensitive 5-dash framed lines.
+  // All three PEM markers are case-sensitive 5-dash framed lines.
   if (signature.includes("-----BEGIN PGP SIGNATURE-----")) return "gpg";
+  if (signature.includes("-----BEGIN SSH SIGNATURE-----")) return "ssh";
   if (signature.includes("-----BEGIN SIGNED MESSAGE-----")) return "sigstore";
   return undefined;
 };

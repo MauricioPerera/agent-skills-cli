@@ -64,15 +64,17 @@ export interface SkillProvenance {
   signature_status: "unsigned" | "valid" | "invalid" | "unverified";
   signed_by?: string;
   /**
-   * Signing method when status === "valid" or "invalid" (v0.14.0+).
-   * "gpg" — classic OpenPGP signature.
+   * Signing method when status === "valid" or "invalid" (v0.14.0+, "ssh" added v0.15.0).
+   * "gpg"      — classic OpenPGP signature.
+   * "ssh"      — SSH-format git signature (gpg.format=ssh; SSH pubkey on the
+   *              publisher's GitHub account).
    * "sigstore" — gitsign / Sigstore CMS signature (Fulcio cert + Rekor entry).
-   * Detection is structural (PEM header). Full Rekor inclusion-proof
-   * verification (the spec's Level 4) is queued for v0.15+; v0.14 surfaces
-   * the method so operators can see WHICH crypto system was used while the
-   * Level 4 verifier ships separately.
+   * Detection is structural (PEM header). For Sigstore, GitHub validates the
+   * cert at lookup time, so an expired Fulcio cert returns reason="bad_cert"
+   * for a properly-signed tag — full Rekor inclusion-proof verification is the
+   * sound Level 4 path and is not yet implemented client-side.
    */
-  signature_method?: "gpg" | "sigstore";
+  signature_method?: "gpg" | "ssh" | "sigstore";
   publisher_verified?: boolean;
   embedding_truncated?: boolean;
 }

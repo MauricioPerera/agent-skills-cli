@@ -226,6 +226,22 @@ MIIBuAYJKoZIhvcNAQcCoIIBqTCCAaUCAQExDzANBglghkgBZQMEAgEFADALBgkq...
     expect(detectSignatureMethod(sigstoreSig)).toBe("sigstore");
   });
 
+  it("returns 'ssh' for SSH-format git signatures (v0.15.0+)", () => {
+    // Real shape from sigstore/cosign@v3.0.6's tag verification block.
+    const sshSig = `-----BEGIN SSH SIGNATURE-----
+U1NIU0lHAAAAAQAAAGgAAAATZWNkc2Etc2hhMi1uaXN0cDI1NgAAAAhuaXN0cDI1NgAAAE
+EEa8T1Y/vsKA1qPB5FHCcTu38N+BySGXZyN9EY6TRgEYttomaX+IeziiCioTyxwqrlCVFT
+-----END SSH SIGNATURE-----`;
+    expect(detectSignatureMethod(sshSig)).toBe("ssh");
+  });
+
+  it("distinguishes SSH from PGP/sigstore even when payloads are similar", () => {
+    // Belt-and-suspenders: the headers differ by a single keyword.
+    expect(detectSignatureMethod("-----BEGIN PGP SIGNATURE-----\nx\n-----END PGP SIGNATURE-----")).toBe("gpg");
+    expect(detectSignatureMethod("-----BEGIN SSH SIGNATURE-----\nx\n-----END SSH SIGNATURE-----")).toBe("ssh");
+    expect(detectSignatureMethod("-----BEGIN SIGNED MESSAGE-----\nx\n-----END SIGNED MESSAGE-----")).toBe("sigstore");
+  });
+
   it("returns undefined for unrecognised payloads", () => {
     expect(detectSignatureMethod("just some random text")).toBeUndefined();
     expect(detectSignatureMethod("-----BEGIN CERTIFICATE-----\n...")).toBeUndefined();

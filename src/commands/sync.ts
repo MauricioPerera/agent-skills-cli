@@ -293,7 +293,7 @@ const syncSingleSkill = async (params: {
   refRequested: string;
   signatureStatus: SignatureStatus;
   signedBy?: string;
-  signatureMethod?: "gpg" | "sigstore";
+  signatureMethod?: "gpg" | "ssh" | "sigstore";
 }): Promise<SyncSkillResult> => {
   const { entry, repo, sha, urlTemplate, bank, embedder, fetchImpl, refRequested, signatureStatus, signedBy, signatureMethod } = params;
 
