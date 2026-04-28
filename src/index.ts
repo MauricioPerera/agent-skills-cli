@@ -123,3 +123,10 @@ export type {
   BenchQueryResult,
   BenchTruthEntry,
 } from "./commands/bench.js";
+
+export { runPublish, printPublishResult } from "./commands/publish.js";
+export type {
+  PublishOptions,
+  PublishResult,
+  PublishSkillResult,
+} from "./commands/publish.js";

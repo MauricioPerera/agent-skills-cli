@@ -9,8 +9,9 @@ import { runSync } from "./commands/sync.js";
 import { printQueryResult, runQuery } from "./commands/query.js";
 import { printExecResult, runExec } from "./commands/exec.js";
 import { printBenchResult, runBench } from "./commands/bench.js";
+import { printPublishResult, runPublish } from "./commands/publish.js";
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 
@@ -36,6 +37,10 @@ Commands (local, no embedding API needed):
   list                             List all subscriptions in the local bank.
   reset                            Wipe all bank state (asks for confirmation).
 
+Author commands (local, no bank needed):
+  publish [<dir>]                  Validate skills/, generate skills-index.json,
+                                   optionally git tag. Use in your skill-pack repo.
+
 Other:
   help                             Show this help.
   version                          Print version.
@@ -57,6 +62,13 @@ Flags (per command):
                         v0.5.0+) | global (v0.4.0 behavior) | none.
   --embedding-provider <p>  (sync, query) Override env auto-detect.
                         Valid: cloudflare | ollama | openai.
+  --check-only          (publish) Validate but don't write or tag. CI-friendly.
+  --tag <version>       (publish) Create git tag at HEAD with this version.
+  --sign                (publish) Sign the git tag (git tag -s). Requires GPG.
+  --repo <repo>         (publish) Set default_source.repo (e.g., github.com/me/pack).
+                        Used on first publish; existing index wins on re-publish.
+  --branch <name>       (publish) Set default_source.default_branch. Default: main.
+  --ref <ref>           (publish) Set latest_release for resolved skill URLs (e.g., v1.0.0).
 
 Embedding providers (v0.6.0+ — auto-detected from env, or set EMBEDDING_PROVIDER):
 
@@ -172,6 +184,28 @@ const main = async (): Promise<void> => {
     const result = await runValidate({ file, json: asJson });
     printValidateResult(result, asJson);
     process.exit(result.valid ? EXIT.OK : EXIT.VALIDATION);
+  }
+
+  if (cmd === "publish") {
+    const dir = args.positional[1] ?? ".";
+    const checkOnly = args.flags.get("check-only") === true;
+    const sign = args.flags.get("sign") === true;
+    const tag = args.flags.get("tag");
+    const repo = args.flags.get("repo");
+    const branch = args.flags.get("branch");
+    const ref = args.flags.get("ref");
+    const result = await runPublish({
+      dir,
+      checkOnly,
+      sign,
+      tag: typeof tag === "string" ? tag : undefined,
+      repo: typeof repo === "string" ? repo : undefined,
+      branch: typeof branch === "string" ? branch : undefined,
+      ref: typeof ref === "string" ? ref : undefined,
+    });
+    printPublishResult(result, asJson);
+    // Non-zero on validation failures so CI blocks bad releases.
+    process.exit(result.invalid + result.errored > 0 ? EXIT.VALIDATION : EXIT.OK);
   }
 
   if (cmd === "resolve") {

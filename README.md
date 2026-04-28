@@ -13,6 +13,22 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
+**v0.8.0** — `publish` command for skill-pack authors. Closes the author side of the loop:
+
+```bash
+$ cd my-skill-pack/    # has skills/foo/SKILL.md, skills/bar/SKILL.md
+$ agent-skills publish --check-only
+Publish 2 skill(s) from .
+
+  · foo                          1.0.0
+  · bar                          1.0.0
+
+summary: 0 added, 0 updated, 2 unchanged
+✓ skills-index.json already up-to-date
+```
+
+What it does: scans `skills/`, validates each `SKILL.md` against the spec, generates or updates `skills-index.json` (preserving hand-crafted summaries and any curated skill ordering across re-publishes), optionally creates a git tag (`--tag v1.0.1`, `--sign` for signed). Idempotent: running twice on an unchanged tree is a byte-identical no-op.
+
 **v0.7.0** — `bench` subcommand for reproducible retrieval evaluation. Anyone can verify the empirical claims in BENCHMARK.md against their own bank, with their own provider, and their own ground truth file:
 
 ```bash
@@ -345,6 +361,59 @@ agent-skills bench bench-truth.jsonl --json > result.json
 
 The public skill pack ships its own truth file at [`agent-skills-pack/bench-truth.jsonl`](https://github.com/MauricioPerera/agent-skills-pack/blob/main/bench-truth.jsonl) — 35 paraphrases × 7 skills.
 
+### `agent-skills publish [<dir>]` *(v0.8.0+)*
+
+Author-side command. Validates every `SKILL.md` under `<dir>/skills/`, generates or updates `<dir>/skills-index.json`, and optionally creates a signed git tag.
+
+```bash
+$ cd my-skill-pack/
+$ agent-skills publish
+Publish 7 skill(s) from .
+
+  · http-get                     1.0.0
+  · http-post-json               1.0.0
+  + new-skill                    1.0.0   (added)
+  ↑ ripgrep-search               2.0.0   (updated)
+  · …
+
+  Removed (in old index, not on disk):
+    - obsolete-skill
+
+summary: 1 added, 1 updated, 5 unchanged, 1 removed
+✓ wrote skills-index.json
+```
+
+**Status glyphs**:
+- `+` added (new on disk, not in old index)
+- `↑` updated (version, url, or summary changed)
+- `·` unchanged (matched the existing index byte-for-byte)
+- `✗` invalid (validation failed — index NOT written)
+- `!` error (parse error or unreadable file)
+
+**Flags**:
+- `--check-only` — validate but don't write or tag. CI-friendly.
+- `--tag <version>` — create git tag at HEAD (e.g., `v1.0.1`).
+- `--sign` — signed tag (`git tag -s`). Requires GPG configured.
+- `--repo <repo>` — first-publish only: set `default_source.repo` (e.g., `github.com/me/pack`).
+- `--branch <name>` — first-publish only: set default branch.
+- `--ref <ref>` — embed this ref in resolved skill URLs (e.g., `v1.0.0`).
+- `--json` — machine-readable result.
+
+**Behaviour**:
+- **Hand-crafted summaries preserved** across re-publishes. New skills get an auto-generated summary from `description`; existing skills keep whatever summary is in the index.
+- **Curated skill ordering preserved**. `publish` walks the existing index's order first, appending only newly-discovered skills (alphabetically among themselves) at the end.
+- **Idempotent**. Running `publish` twice on an unchanged tree is a byte-identical no-op — no timestamps, no reordering. Safe in pre-commit hooks.
+- **Fail-fast**. If any `SKILL.md` is invalid, the index is NOT written and the command exits with code 5.
+
+**CI integration** (e.g., GitHub Actions):
+
+```yaml
+- name: Validate skill pack
+  run: |
+    npx --yes agent-skills-cli@latest publish --check-only --json > pub.json
+    [ "$(jq '.invalid + .errored' pub.json)" -eq 0 ] || exit 1
+```
+
 ## Library usage
 
 The CLI is also a library, importable in your own TypeScript:
@@ -389,9 +458,9 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.5.0 | shipped | + intent-conditional rerank as default (`IntentEmbeddingCache` + sim≥0.7 filter); fixes the 50-use stress failure with **100 % top-1** on live Workers AI |
 | v0.6.0 | shipped | + Ollama (local, zero-credential) + OpenAI / OpenAI-compatible (Together / vLLM / TEI / infinity / …) embedding providers; auto-detect from env or `EMBEDDING_PROVIDER` flag |
 | v0.6.1 | shipped | + 4 code-review patches (docstring, pure-Node PATH scan, ENOENT discrimination, bounded-concurrency sync) |
-| **v0.7.0** | **shipped** | + `bench` subcommand: reproducible top-K accuracy against a JSONL/JSON-array truth file. CI integration via JSON output + non-zero exit on any failure. 240/240 tests |
-| v0.8.0 | planned | `publish` (skill author tooling: validate + stamp + git tag) + per-tenant audit scoping |
-| v0.9.0 | planned | Sigstore signature verification; signed-tag enforcement at sync time |
+| v0.7.0 | shipped | + `bench` subcommand: reproducible top-K accuracy against a JSONL/JSON-array truth file. CI integration via JSON output + non-zero exit on any failure |
+| **v0.8.0** | **shipped** | + `publish` command: validate skills/, generate skills-index.json (preserves hand-crafted summaries + curated ordering), optionally git-tag. 256/256 tests; idempotent on real packs |
+| v0.9.0 | planned | Per-tenant audit scoping (`--user <id>`); Sigstore signature verification |
 | v1.0.0 | planned | IVF-style ANN backend; stable API; **first npm publication** (under a final, owned name) |
 
 ## Sister projects
