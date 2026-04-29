@@ -31,13 +31,22 @@ import type { CustomCommand } from "just-bash";
  *
  * Bank-managed fields (per SPEC §9 reserved names): identity, provenance,
  * embedding, embedding_model, inserted_at, updated_at, deprecated, removed,
- * usage_count, avg_rating.
+ * usage_count, avg_rating, command_source.
+ *
+ * NOTE: keep this list in sync with the bank-added fields on IndexedSkill
+ * (see bank.ts). When a new bank-managed field lands, add it here too —
+ * the schema's `additionalProperties: false` at the root will otherwise
+ * reject the skill at exec re-validation, breaking exec for that field's
+ * users. There is a regression test in tests/exec.test.ts that exercises
+ * this for `command_source` (the v2.1.0 pack-distributed CustomCommand
+ * source); follow that pattern when adding new fields.
  */
 const extractFrontmatter = (skill: IndexedSkill): SkillFrontmatter => {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const {
     identity, provenance, embedding, embedding_model,
     inserted_at, updated_at, deprecated, removed, usage_count, avg_rating,
+    command_source,
     ...frontmatter
   } = skill as IndexedSkill & {
     deprecated?: boolean;

@@ -316,4 +316,45 @@ describe("runExec — re-validation safety net", () => {
       runExec({ bank, skillIdentifier: "echo-skill", args: { msg: "x" } }),
     ).rejects.toThrow(/literal quote/);
   });
+
+  // Regression: exec re-validates the skill against the SKILL.md JSON Schema,
+  // which has `additionalProperties: false` at the root. Bank-managed fields
+  // (identity, provenance, embedding, …, command_source) live on IndexedSkill
+  // but NOT on the schema, so exec must strip them before validation. Missing
+  // any one of them in `extractFrontmatter` causes exec to fail with a
+  // misleading "additional property" error for any skill that has that field
+  // populated. `command_source` (v2.1.0+) was the most recently-added bank
+  // field; this test pins the strip behaviour for it.
+  it("does not reject a skill that has command_source set (v2.1.0+ pack-distributed CustomCommand)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    // A pack-distributed CustomCommand: minimal valid factory that registers
+    // an `mycmd` command echoing its first arg. Run via command_template.
+    const customCommandJs = `
+      export default ({ defineCommand }) =>
+        defineCommand("mycmd", async (args) => ({
+          stdout: (args[0] ?? "") + "\\n",
+          stderr: "",
+          exitCode: 0,
+        }));
+    `;
+    await bank.upsertSkill(buildSkill({
+      identity: "github.com/test/pack@a1b2c3d4e5f67890abcdef1234567890abcdef12/with-cmd",
+      id: "with-cmd",
+      command_template: "mycmd {msg}",
+      args: { msg: { type: "string" } },
+      command_source: customCommandJs,
+    }));
+
+    const result = await runExec({
+      bank,
+      skillIdentifier: "with-cmd",
+      args: { msg: "hello-from-pack-cmd" },
+    });
+
+    // The exec must succeed: re-validation accepted the stripped frontmatter,
+    // the loader installed the pack's `mycmd`, and just-bash dispatched to it.
+    expect(result.exit_code).toBe(0);
+    expect(result.stdout).toBe("hello-from-pack-cmd\n");
+    expect(result.stderr).toBe("");
+  });
 });
