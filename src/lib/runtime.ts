@@ -217,14 +217,73 @@ export const loadCustomCommandFromSource = async (
  * for cleaning up the scratch dir after the exec completes (this gives
  * the bank a chance to inspect outputs before deletion).
  */
+/**
+ * Translate an agent-skills `network` allowlist into a just-bash NetworkConfig.
+ *
+ * The agent-skills SPEC §2.10 / §4.4 lets skills declare `network` as a list
+ * of origins. just-bash, however, has stricter semantics:
+ *
+ *   1. Each entry is parsed as a fully-qualified URL with literal origin.
+ *      Wildcard syntax like `https://*` parses (origin becomes `https://*`)
+ *      but never matches any real URL.
+ *   2. `allowedMethods` defaults to `["GET", "HEAD"]`. POST/PUT/DELETE/PATCH
+ *      are blocked by default even when the URL is allowed.
+ *
+ * The pack ecosystem in practice ships skills that declare:
+ *   - `network: ["https://*", "http://*"]` for "any URL the user provides"
+ *     (e.g., http-get, http-post-json — generic HTTP fetchers).
+ *   - `network: ["https://api.github.com/"]` for skills targeting one origin.
+ *
+ * The first form fails silently (matches nothing) without this translation.
+ * Skill authors writing `https://*` clearly intend "any HTTPS"; honouring
+ * that intent requires `dangerouslyAllowFullInternetAccess: true`.
+ *
+ * Translation rules:
+ *   - If any entry is `https://*`, `http://*`, or just `*` →
+ *     dangerouslyAllowFullInternetAccess: true + all-methods, AND keep
+ *     non-wildcard entries as `allowedUrlPrefixes` so they're documented.
+ *   - Otherwise: pass entries through unchanged; the skill expects strict
+ *     origin policy (no methods extension — caller must opt in via SPEC if
+ *     they need POST against a specific origin).
+ *
+ * Returns `undefined` when no network access is granted (empty/missing).
+ */
+export const buildNetworkConfig = (network?: string[]): NetworkConfig | undefined => {
+  if (network === undefined || network.length === 0) return undefined;
+
+  const isWildcard = (entry: string): boolean =>
+    entry === "*" || entry === "https://*" || entry === "http://*" ||
+    entry === "https://*/" || entry === "http://*/";
+
+  const wildcards = network.filter(isWildcard);
+  const specific = network.filter((e) => !isWildcard(e));
+
+  if (wildcards.length > 0) {
+    // Skill explicitly opted into "any URL". Mirror that into just-bash's
+    // dangerous-allow flag and unlock all common HTTP methods (otherwise
+    // POST-shaped skills would still fail).
+    const cfg: NetworkConfig = {
+      dangerouslyAllowFullInternetAccess: true,
+      allowedMethods: ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    };
+    if (specific.length > 0) {
+      cfg.allowedUrlPrefixes = specific;
+    }
+    return cfg;
+  }
+
+  // Strict-origin mode. just-bash's default (GET + HEAD only) applies; if
+  // a skill needs POST against a specific origin, the SPEC needs an
+  // `allowed_methods` field (not yet defined). For now, callers using
+  // strict origins are GET-only.
+  return { allowedUrlPrefixes: specific };
+};
+
 export const createSandboxedExec = (
   opts: SandboxedExecOptions = {},
 ): { bash: Bash; scratchDir: string } => {
   const scratchDir = mkdtempSync(join(tmpdir(), "agent-skills-scratch-"));
-  const network: NetworkConfig | undefined =
-    opts.network !== undefined && opts.network.length > 0
-      ? { allowedUrlPrefixes: opts.network }
-      : undefined;
+  const network = buildNetworkConfig(opts.network);
   const dataCmds = createDataPlugin({
     rootDir: opts.rootDir ?? "/data",
     encryptionKey: opts.encryptionKey,
