@@ -6,6 +6,76 @@ This file follows a strict per-major-version section format. Each section is the
 
 ---
 
+## v1.x → v2.0.0
+
+**Breaking changes: 2 (runtime + storage).** Both come from making the CLI conform to the agent-skills spec it claims to implement. Pre-v2 the CLI ran a parallel non-conformant runtime; v2 closes that divergence.
+
+### Runtime: skills now execute under sandboxed just-bash
+
+**v1.x**: `agent-skills exec` spawned `bash -c "<command>"` against the host shell. Any skill could read/write any path, call any URL, and use any binary on the operator's `$PATH`. Host env vars all leaked through.
+
+**v2.0**: `agent-skills exec` runs the substituted command inside a sandboxed [`just-bash`](https://github.com/vercel-labs/just-bash) instance per SPEC §4.4:
+
+- **Filesystem** restricted to a fresh per-skill scratch directory (path exposed to the skill as `$AGENT_SCRATCH`).
+- **Network** restricted to the skill's declared `network` allowlist (empty / missing = no HTTP).
+- **Env vars** restricted to `required_env ∪ optional_env`.
+- **Process spawning** restricted to commands registered in just-bash + just-bash-data's plugin set. There is no `/bin/sh` fallback.
+
+**What this breaks for existing skills**:
+
+| Skill behaviour | v1.x | v2.0 |
+|---|---|---|
+| Calls `gh`, `aws`, `kubectl`, `psql`, etc. (host binaries not part of just-bash's command set) | works | **fails** unless a CustomCommand wrapper is registered |
+| Reads `$ANY_HOST_ENV_VAR` | works | **fails** unless declared in `required_env` / `optional_env` |
+| Writes to arbitrary paths | works | **fails** — only `$AGENT_SCRATCH` is writable |
+| Makes HTTP calls | works | **fails** unless URL prefix is in skill's `network` allowlist |
+
+**Migration**: pack authors should review every `command_template` against this list. Skills that wrap host CLIs (the dominant pattern in the public pack) require either:
+- Re-implementing as a CustomCommand registered with the bank, OR
+- Acknowledgement that they only run on banks that have those commands registered, OR
+- A move to a different distribution model
+
+The spec describes this trade-off in DESIGN.md §357 and IMPLEMENTATION.md §sandboxing.
+
+### Storage: bank state migrated to just-bash-data db / vec
+
+**v1.x**: bank state stored as JSON files at `<bankDir>`:
+- `subscriptions.json` (array of subscriptions)
+- `skills/<hash>.json` (one file per skill)
+- `audit.jsonl` (newline-delimited audit log)
+- `meta.json` (bank metadata)
+
+**v2.0**: bank state stored via [`just-bash-data`](https://www.npmjs.com/package/just-bash-data) collections at `<bankDir>/data/`:
+- `db skill_subscriptions` collection
+- `db skills` collection
+- `db skill_audit` collection
+- `vec skills` index for embeddings (replaces in-memory cosine over `skills/`)
+- `meta.json` (still file-based for embedding-model coordination)
+
+**What this breaks**: existing v1.x banks at `~/.config/agent-skills/` are not readable by v2. The legacy JSON files are ignored; the bank looks empty on first run.
+
+**Migration**:
+
+```bash
+# Option A: re-sync from source (recommended).
+agent-skills sync github.com/<your-org>/<pack>@<tag>
+# Repeat for every subscription you had in v1.x.
+
+# Option B: blow away and start over.
+rm -rf ~/.config/agent-skills
+agent-skills sync ...
+```
+
+Audit history from v1.x is preserved in `<bankDir>/audit.jsonl` for inspection but not read by v2's `agent-skills audit` command. Operators who need the old log readable in v2's storage can grep / process the file manually; a one-shot import tool is not provided.
+
+### What you don't need to do
+
+- API surface (TypeScript exports) **is unchanged**. The same `import { runExec, FileBank, ... }` calls work. The internal storage and runtime swapped under the same surface.
+- SKILL.md format unchanged. Skills you authored under v1 spec v1.0 are valid under v2 / spec v1.0 unchanged.
+- `STABILITY.md` tiers unchanged. Same STABLE / EXPERIMENTAL / INTERNAL boundaries.
+
+---
+
 ## v0.x → v1.0.0
 
 **Breaking changes: none.**
