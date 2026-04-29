@@ -198,7 +198,20 @@ export const runExec = async (opts: ExecOptions): Promise<ExecResult> => {
   const network = frontmatter.network ?? [];
   const extraCommands: CustomCommand[] = [];
   if (typeof skill.command_source === "string" && skill.command_source.length > 0) {
-    const loaded = await loadCustomCommandFromSource(skill.command_source);
+    // If the pack ships a malformed command.js, log ONCE per exec with the
+    // skill identity + a structured reason. Without this, the only visible
+    // symptom is "command not found" from just-bash when command_template
+    // tries to invoke the unregistered name — which is misleading because
+    // the pack DID ship a CustomCommand, it just failed to load.
+    const loaded = await loadCustomCommandFromSource(skill.command_source, {
+      onError: (reason, error) => {
+        const detail = error instanceof Error ? error.message : "";
+        process.stderr.write(
+          `[agent-skills] failed to load pack-distributed CustomCommand for ` +
+            `${skill.identity}: ${reason}${detail.length > 0 ? ` — ${detail}` : ""}\n`,
+        );
+      },
+    });
     if (loaded !== null) extraCommands.push(loaded);
   }
   const result = await runBash(resolved.command, timeoutSec, envWhitelist, network, extraCommands);

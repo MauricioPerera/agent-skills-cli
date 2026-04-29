@@ -121,22 +121,86 @@ export interface PackCommandApi {
  * result means the skill falls back to just-bash defaults (built-ins +
  * just-bash-data); commands referenced in `command_template` that aren't
  * available will fail with "command not found" at exec.
+ *
+ * The optional `onError` callback receives a structured `reason` plus the
+ * underlying `error` (if any) so callers can surface a diagnosable message
+ * to the operator. Without it, malformed packs fail silently — the only
+ * visible symptom is "command not found" from the runtime, which is the
+ * single biggest source of pack-author confusion. Exec passes a callback
+ * that emits one `console.warn` keyed by the skill identity.
  */
+
+/**
+ * Why the load failed. Stable strings — callers may switch on these.
+ *
+ *   - "import-failed":  the data:URL import threw (most often an ESM
+ *                       parse error in the pack's command.js, or a
+ *                       runtime ReferenceError if the pack tried to
+ *                       resolve a bare specifier like `import "node:fs"`).
+ *   - "no-default":     the module loaded but didn't `export default` a
+ *                       function. The pack convention requires a factory.
+ *   - "factory-threw":  `default(api)` threw. The factory should be pure
+ *                       data-construction work; if it does I/O, a network
+ *                       blip can land here.
+ *   - "factory-empty":  the factory returned `null`/`undefined`.
+ *   - "shape-invalid":  the factory returned a value that is not a
+ *                       Command (missing `name: string` or
+ *                       `execute: function`).
+ */
+export type LoadFailureReason =
+  | "import-failed"
+  | "no-default"
+  | "factory-threw"
+  | "factory-empty"
+  | "shape-invalid";
+
+export interface LoadCommandOptions {
+  /**
+   * Called once when the load fails (returns `null`). Never called on the
+   * happy path. Implementations should be cheap — exec invokes this on the
+   * critical path. Throwing from `onError` is treated as a programming
+   * error and propagates up; do not throw.
+   */
+  onError?: (reason: LoadFailureReason, error: unknown) => void;
+}
+
 export const loadCustomCommandFromSource = async (
   source: string,
+  opts: LoadCommandOptions = {},
 ): Promise<Command | null> => {
+  let mod: { default?: unknown };
   try {
     const dataUrl = `data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`;
-    const mod = (await import(dataUrl)) as { default?: unknown };
-    if (typeof mod.default !== "function") return null;
-    const factory = mod.default as (api: PackCommandApi) => unknown;
-    const cmd = factory({ defineCommand }) as Command | null;
-    if (cmd === null || cmd === undefined) return null;
-    if (typeof cmd.name !== "string" || typeof cmd.execute !== "function") return null;
-    return cmd;
-  } catch {
+    mod = (await import(dataUrl)) as { default?: unknown };
+  } catch (err) {
+    opts.onError?.("import-failed", err);
     return null;
   }
+
+  if (typeof mod.default !== "function") {
+    opts.onError?.("no-default", null);
+    return null;
+  }
+
+  const factory = mod.default as (api: PackCommandApi) => unknown;
+  let cmd: unknown;
+  try {
+    cmd = factory({ defineCommand });
+  } catch (err) {
+    opts.onError?.("factory-threw", err);
+    return null;
+  }
+
+  if (cmd === null || cmd === undefined) {
+    opts.onError?.("factory-empty", null);
+    return null;
+  }
+  const candidate = cmd as { name?: unknown; execute?: unknown };
+  if (typeof candidate.name !== "string" || typeof candidate.execute !== "function") {
+    opts.onError?.("shape-invalid", null);
+    return null;
+  }
+  return cmd as Command;
 };
 
 /**
