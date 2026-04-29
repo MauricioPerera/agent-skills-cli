@@ -14,9 +14,11 @@ import { appendFile, mkdir, readFile, readdir, writeFile, rm } from "node:fs/pro
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import type { Bash } from "just-bash";
 import type { SkillFrontmatter } from "../types.js";
 import { cosineSimilarity } from "./embed.js";
 import { CliError, EXIT } from "./errors.js";
+import { createBankBash, dbCount, dbFind, dbInsert, dbUpdate } from "./runtime.js";
 
 /**
  * Distinguish "file/dir not present yet" (which is normal for fresh banks)
@@ -230,12 +232,29 @@ export class FileBank {
    */
   private auditCacheAll: AuditEntry[] | null = null;
 
+  /**
+   * Lazy just-bash runtime for db / vec collections. Created on first
+   * access and reused for the lifetime of this FileBank instance.
+   * Storage migration in progress (subscriptions ported v0.20.0+);
+   * collections that still live as JSON files use the legacy paths
+   * above and ignore this field.
+   */
+  private bashInstance: Bash | null = null;
+
   constructor(config: BankConfig = {}) {
     this.rootDir = config.rootDir ?? defaultBankRoot();
     this.skillsDir = join(this.rootDir, "skills");
     this.subsPath = join(this.rootDir, "subscriptions.json");
     this.metaPath = join(this.rootDir, "meta.json");
     this.auditPath = join(this.rootDir, "audit.jsonl");
+  }
+
+  /** Lazily build the bank-scoped just-bash runtime. */
+  private getBash(): Bash {
+    if (this.bashInstance === null) {
+      this.bashInstance = createBankBash({ bankDir: this.rootDir });
+    }
+    return this.bashInstance;
   }
 
   /** Internal: drop the listSkills cache. Called by every mutator. */
@@ -310,42 +329,40 @@ export class FileBank {
   }
 
   // ─── Subscriptions ───────────────────────────────────────────────────
+  //
+  // Backed by `db skill_subscriptions` per IMPLEMENTATION.md. The on-disk
+  // `subscriptions.json` is no longer read; just-bash-data persists docs
+  // under <bankDir>/data/. The app-level type uses `id`; the db uses `_id`
+  // (just-bash-data convention) — translated at the boundary here.
 
   async listSubscriptions(): Promise<Subscription[]> {
-    let text: string;
-    try {
-      text = await readFile(this.subsPath, "utf8");
-    } catch (err) {
-      if (isMissing(err)) return [];
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new CliError(
-        EXIT.RUNTIME,
-        `cannot read subscriptions.json at ${this.subsPath}: ${msg}`,
-      );
-    }
-    try {
-      const parsed = JSON.parse(text);
-      if (!Array.isArray(parsed)) return [];
-      return parsed as Subscription[];
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new CliError(
-        EXIT.RUNTIME,
-        `subscriptions.json at ${this.subsPath} is not valid JSON: ${msg}`,
-      );
-    }
+    const docs = await dbFind<Subscription & { _id: string }>(
+      this.getBash(),
+      "skill_subscriptions",
+      {},
+      { sort: "last_synced:1" },
+    );
+    return docs.map(({ _id, ...rest }) => ({ ...rest, id: _id }) as unknown as Subscription);
   }
 
   async upsertSubscription(sub: Subscription): Promise<void> {
-    await this.ensureDir();
-    const subs = await this.listSubscriptions();
-    const idx = subs.findIndex((s) => s.id === sub.id);
-    if (idx >= 0) {
-      subs[idx] = sub;
+    const { id, ...rest } = sub;
+    const bash = this.getBash();
+    // just-bash-data's `db update` does not support upsert semantics
+    // (see runtime.ts dbUpdate jsdoc). Pattern: count → insert if
+    // missing, else update. The two-step is non-atomic but acceptable
+    // for the bank's single-process model.
+    const exists = await dbCount(bash, "skill_subscriptions", { _id: id });
+    if (exists === 0) {
+      await dbInsert(bash, "skill_subscriptions", { _id: id, ...rest });
     } else {
-      subs.push(sub);
+      await dbUpdate(
+        bash,
+        "skill_subscriptions",
+        { _id: id },
+        { $set: { _id: id, ...rest } },
+      );
     }
-    await writeFile(this.subsPath, JSON.stringify(subs, null, 2), "utf8");
   }
 
   // ─── Skills ──────────────────────────────────────────────────────────
@@ -563,6 +580,10 @@ export class FileBank {
     }
     this.invalidateSkillsCache();
     this.auditCacheAll = null;
+    // Drop the cached just-bash runtime — its in-memory state (and the
+    // ReadWriteFs binding to a now-deleted directory) is no longer valid.
+    // The next read/write rebuilds a fresh Bash against the fresh dir.
+    this.bashInstance = null;
   }
 
   /** Public accessor for the root directory (e.g., for CLI UX). */

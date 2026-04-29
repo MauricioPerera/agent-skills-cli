@@ -125,6 +125,29 @@ export const runBashCommand = async (
 /** Single-quote a string for safe inclusion in a bash command. */
 const sq = (raw: string): string => `'${raw.replace(/'/g, "'\\''")}'`;
 
+/**
+ * Sentinel raised internally when just-bash-data returns "not found: <coll>"
+ * (exit code 3 + that exact stderr). For read-only operations (`find`,
+ * `count`) the absence of a collection is semantically equivalent to "no
+ * documents", so the dbFind / dbCount wrappers translate this to empty /
+ * zero. For mutating operations (`insert`, `update`, `remove`) the caller
+ * sees the failure normally.
+ */
+class CollectionNotFound extends Error {
+  constructor(public readonly collection: string) {
+    super(`collection not found: ${collection}`);
+  }
+}
+
+const isCollectionNotFound = (
+  exitCode: number,
+  stderr: string,
+): string | null => {
+  if (exitCode !== 3) return null;
+  const m = stderr.trim().match(/^not found:\s*(\S+)/);
+  return m ? m[1]! : null;
+};
+
 const runDb = async (
   bash: Bash,
   args: string[],
@@ -132,6 +155,10 @@ const runDb = async (
   const cmd = ["db", ...args.map(sq)].join(" ");
   const result = await bash.exec(cmd);
   if (result.exitCode !== 0) {
+    const missing = isCollectionNotFound(result.exitCode, result.stderr);
+    if (missing !== null) {
+      throw new CollectionNotFound(missing);
+    }
     throw new CliError(
       EXIT.RUNTIME,
       `db command failed (exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
@@ -159,7 +186,11 @@ export const dbInsert = async <T extends Record<string, unknown>>(
   return parseJson<T>(out, `${collection} insert`);
 };
 
-/** Find documents matching `filter`. Empty filter = all docs. */
+/**
+ * Find documents matching `filter`. Empty filter = all docs.
+ * If the collection doesn't exist yet, returns `[]` (a freshly-created
+ * bank has no documents and no collections; both are "no results").
+ */
 export const dbFind = async <T = Record<string, unknown>>(
   bash: Bash,
   collection: string,
@@ -170,8 +201,13 @@ export const dbFind = async <T = Record<string, unknown>>(
   if (opts.sort !== undefined) args.push("--sort", opts.sort);
   if (opts.limit !== undefined) args.push("--limit", String(opts.limit));
   if (opts.skip !== undefined) args.push("--skip", String(opts.skip));
-  const out = await runDb(bash, args);
-  return parseJson<T[]>(out, `${collection} find`);
+  try {
+    const out = await runDb(bash, args);
+    return parseJson<T[]>(out, `${collection} find`);
+  } catch (err) {
+    if (err instanceof CollectionNotFound) return [];
+    throw err;
+  }
 };
 
 /**
@@ -205,13 +241,22 @@ export const dbRemove = async (
   return parseJson<{ removed: number }>(out, `${collection} remove`);
 };
 
-/** Count documents matching `filter`. */
+/**
+ * Count documents matching `filter`. Returns 0 if the collection doesn't
+ * exist yet — the absence of a collection is semantically equivalent
+ * to "no documents".
+ */
 export const dbCount = async (
   bash: Bash,
   collection: string,
   filter: Record<string, unknown> = {},
 ): Promise<number> => {
-  const out = await runDb(bash, [collection, "count", JSON.stringify(filter)]);
-  const parsed = parseJson<{ count: number }>(out, `${collection} count`);
-  return parsed.count;
+  try {
+    const out = await runDb(bash, [collection, "count", JSON.stringify(filter)]);
+    const parsed = parseJson<{ count: number }>(out, `${collection} count`);
+    return parsed.count;
+  } catch (err) {
+    if (err instanceof CollectionNotFound) return 0;
+    throw err;
+  }
 };

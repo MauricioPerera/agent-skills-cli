@@ -386,13 +386,16 @@ describe("FileBank corruption discrimination (v0.6.1+)", () => {
     expect(await bank.getMeta()).toBeNull();
   });
 
-  it("listSubscriptions throws CliError on malformed JSON (not silent empty)", async () => {
+  it.skip("listSubscriptions throws CliError on malformed subscriptions.json (legacy storage)", async () => {
+    // Subscriptions migrated to just-bash-data db backing in v0.20.0+.
+    // The old `subscriptions.json` file is no longer read; corruption
+    // discrimination has different semantics under the new storage
+    // (the data plugin handles its own integrity checks). Skipping
+    // this test pending an equivalent assertion against db corruption.
     const bank = new FileBank({ rootDir: tmpDir });
     await bank.ensureDir();
-
     const fs = await import("node:fs/promises");
     await fs.writeFile(join(tmpDir, "subscriptions.json"), "{not json", "utf8");
-
     await expect(bank.listSubscriptions()).rejects.toThrow(/subscriptions\.json.*not valid JSON/i);
   });
 
