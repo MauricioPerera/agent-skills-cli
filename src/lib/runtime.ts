@@ -16,6 +16,8 @@
 
 import {
   Bash,
+  MountableFs,
+  OverlayFs,
   ReadWriteFs,
   defineCommand,
   type Command,
@@ -23,10 +25,11 @@ import {
   type CustomCommand,
   type ExecOptions,
   type ExecResult,
+  type IFileSystem,
   type NetworkConfig,
 } from "just-bash";
 import { createDataPlugin } from "just-bash-data";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -73,6 +76,15 @@ export interface SandboxedExecOptions extends BashRuntimeOptions {
    * no network access is permitted.
    */
   network?: string[];
+  /**
+   * Filesystem allowlist per SPEC §2.11 (schema 0.2+). Each entry is
+   * a host-absolute directory path; the sandbox grants read-only
+   * access to those paths in addition to `$AGENT_SCRATCH`. Writes
+   * still go exclusively to scratch — this is a read allowlist.
+   * When empty/missing, scratch is the only readable path (v0.1
+   * default, preserved).
+   */
+  filesystem?: string[];
   /**
    * Pack-distributed CustomCommands to register alongside the data
    * plugin. Loaded by the bank from `command.js` files shipped in the
@@ -279,6 +291,106 @@ export const buildNetworkConfig = (network?: string[]): NetworkConfig | undefine
   return { allowedUrlPrefixes: specific };
 };
 
+/**
+ * Convert a host path to a POSIX-style virtual mount point that
+ * `MountableFs` accepts (it requires absolute paths starting with '/').
+ *
+ * On POSIX hosts (Linux / macOS) any absolute host path is already
+ * valid, so the function returns it unchanged.
+ *
+ * On Windows host paths look like `C:\Users\foo` — those aren't
+ * accepted by MountableFs. We translate them to POSIX-style:
+ * `C:\Users\foo` → `/c/Users/foo`. The drive letter is lower-cased
+ * for visual stability and the backslashes are flipped.
+ *
+ * Skill authors writing portable SKILL.md MUST use POSIX paths in
+ * `filesystem` — that's what SPEC §2.11 says ("host-absolute directory
+ * path"). This helper exists so tests, dev tooling, and Windows-only
+ * banks aren't blocked.
+ */
+const toVirtualMountPoint = (hostPath: string): string => {
+  // Already POSIX-style absolute → use as-is.
+  if (hostPath.startsWith("/")) return hostPath;
+  // Windows-style absolute (e.g., "C:\\Users\\foo" or "C:/Users/foo").
+  const winMatch = /^([A-Za-z]):[\\/](.*)$/.exec(hostPath);
+  if (winMatch !== null) {
+    const drive = winMatch[1]!.toLowerCase();
+    const rest = winMatch[2]!.replace(/\\/g, "/");
+    return rest.length === 0 ? `/${drive}` : `/${drive}/${rest}`;
+  }
+  // Fallback: prepend '/' and hope.
+  return "/" + hostPath.replace(/\\/g, "/");
+};
+
+/**
+ * Build the IFileSystem for a sandboxed exec.
+ *
+ * Default (no `filesystem` allowlist): the bash sees only the per-skill
+ * scratch dir as `/`, just like the v0.1 sandbox (writes ok, no host
+ * paths reachable). This preserves the SPEC §4.4 "scratch only" rule
+ * for skills that don't use the v0.2 `filesystem` field.
+ *
+ * With `filesystem: [paths…]`: build a `MountableFs` whose base is the
+ * scratch dir (writable) and which mounts each declared host path as
+ * an `OverlayFs(readOnly: true)` at the same virtual path. Reads under
+ * a mount point go to the host filesystem (read-only); writes anywhere
+ * outside scratch raise an error from the OverlayFs read-only guard.
+ *
+ * Implements SPEC §2.11 + the read/write split in §4.4.
+ */
+export const buildSandboxFs = (
+  scratchDir: string,
+  filesystem?: string[],
+): IFileSystem => {
+  const baseScratch = new ReadWriteFs({ root: scratchDir });
+
+  if (filesystem === undefined || filesystem.length === 0) {
+    return baseScratch;
+  }
+
+  const fs = new MountableFs({ base: baseScratch });
+  for (const hostPath of filesystem) {
+    // Skip entries that don't exist on this host. Skills declaring
+    // `filesystem: ["/etc"]` for portability shouldn't crash the bank
+    // on hosts where that path simply isn't present (e.g., Windows).
+    // The skill will see a smaller-than-declared mount set; commands
+    // referring to absent paths fail cleanly with ENOENT at exec time.
+    let exists = false;
+    try {
+      exists = existsSync(hostPath) && statSync(hostPath).isDirectory();
+    } catch {
+      exists = false;
+    }
+    if (!exists) {
+      // Best-effort signal to the operator without polluting test output.
+      // process.stderr is safe — never the LLM context.
+      process.stderr.write(
+        `[agent-skills] filesystem allowlist entry skipped (not a directory on this host): ${hostPath}\n`,
+      );
+      continue;
+    }
+
+    // Per SPEC §2.11, banks MAY canonicalize entries. We trust the
+    // bank's already-validated input here (validateSkill enforces the
+    // pattern `^/[^\\0]*$` in the JSON Schema). Windows host paths get
+    // translated to POSIX-style virtual mount points (see helper).
+    const mountPoint = toVirtualMountPoint(hostPath);
+    // MountableFs strips its mount-point prefix before forwarding to the
+    // inner fs (verified empirically on just-bash 2.x). The inner
+    // OverlayFs therefore sees paths starting at "/" — set its own
+    // mountPoint to "/" so its root maps to the request's '/'. Without
+    // this, OverlayFs defaults its mountPoint to "/home/user/project"
+    // and presents the host content under that virtual subdir, which
+    // doesn't compose with MountableFs's prefix stripping.
+    fs.mount(mountPoint, new OverlayFs({
+      root: hostPath,
+      mountPoint: "/",
+      readOnly: true,
+    }));
+  }
+  return fs;
+};
+
 export const createSandboxedExec = (
   opts: SandboxedExecOptions = {},
 ): { bash: Bash; scratchDir: string } => {
@@ -294,7 +406,7 @@ export const createSandboxedExec = (
     ? [...dataCmds, ...opts.extraCommands]
     : dataCmds;
   const bash = new Bash({
-    fs: new ReadWriteFs({ root: scratchDir }),
+    fs: buildSandboxFs(scratchDir, opts.filesystem),
     customCommands,
     ...(network !== undefined ? { network } : {}),
   });

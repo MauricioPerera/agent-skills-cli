@@ -68,6 +68,19 @@ export interface SkillFrontmatter {
   required_env?: string[];
   optional_env?: string[];
   network?: string[];
+  /**
+   * Host filesystem path allowlist. Read-only access to declared host
+   * directories, in addition to `$AGENT_SCRATCH`. Each entry is a host-
+   * absolute directory path. Per SPEC §2.11 (added in spec v1.2 / schema 0.2).
+   *
+   * Skills using this field MUST declare `schema_version: "0.2"`. A v0.1
+   * skill with this field is rejected at validation by the cross-field
+   * constraint in schemas/skill.schema.json.
+   *
+   * Sandboxed banks MUST grant read-only access to these paths and MUST
+   * still block writes outside `$AGENT_SCRATCH`.
+   */
+  filesystem?: string[];
   applicable_when?: ApplicableWhen;
   deprecates?: string[];
   migration_notes?: string;

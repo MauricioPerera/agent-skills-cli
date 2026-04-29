@@ -112,9 +112,10 @@ const runBash = async (
   timeoutSec: number,
   envWhitelist: string[],
   network: string[],
+  filesystem: string[],
   extraCommands: CustomCommand[],
 ): Promise<{ exit_code: number; stdout: string; stderr: string; elapsed_ms: number; timed_out: boolean }> => {
-  const { bash, scratchDir } = createSandboxedExec({ network, extraCommands });
+  const { bash, scratchDir } = createSandboxedExec({ network, filesystem, extraCommands });
   try {
     const env: Record<string, string> = { AGENT_SCRATCH: scratchDir };
     for (const name of envWhitelist) {
@@ -196,6 +197,7 @@ export const runExec = async (opts: ExecOptions): Promise<ExecResult> => {
     ...(frontmatter.optional_env ?? []),
   ];
   const network = frontmatter.network ?? [];
+  const filesystem = frontmatter.filesystem ?? [];
   const extraCommands: CustomCommand[] = [];
   if (typeof skill.command_source === "string" && skill.command_source.length > 0) {
     // If the pack ships a malformed command.js, log ONCE per exec with the
@@ -214,7 +216,7 @@ export const runExec = async (opts: ExecOptions): Promise<ExecResult> => {
     });
     if (loaded !== null) extraCommands.push(loaded);
   }
-  const result = await runBash(resolved.command, timeoutSec, envWhitelist, network, extraCommands);
+  const result = await runBash(resolved.command, timeoutSec, envWhitelist, network, filesystem, extraCommands);
 
   // 6. Audit (unless --no-audit)
   if (opts.noAudit !== true) {

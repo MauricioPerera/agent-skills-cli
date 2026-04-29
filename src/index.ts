@@ -235,6 +235,8 @@ export {
   createBashRuntime,
   createBankBash,
   createSandboxedExec,
+  buildSandboxFs,
+  buildNetworkConfig,
   cleanupScratch,
   loadCustomCommandFromSource,
   runBashCommand,

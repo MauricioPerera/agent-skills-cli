@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/MauricioPerera/agent-skills/blob/v0.1.1/schemas/skill.schema.json",
+  "$id": "https://github.com/MauricioPerera/agent-skills/blob/v0.2.0/schemas/skill.schema.json",
   "title": "agent-skills SKILL.md frontmatter",
-  "description": "JSON Schema describing the YAML frontmatter of a SKILL.md file. Validate the parsed frontmatter (post-YAML-decode, as JSON) against this schema. Schema version: 0.1.",
+  "description": "JSON Schema describing the YAML frontmatter of a SKILL.md file. Validate the parsed frontmatter (post-YAML-decode, as JSON) against this schema. Schema versions: 0.1 (baseline) or 0.2 (adds optional `filesystem` allowlist, SPEC §2.11).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,11 +14,18 @@
     "use_when",
     "command_template"
   ],
+  "allOf": [
+    {
+      "$comment": "If the skill declares `filesystem`, schema_version MUST be '0.2'. Per SPEC §2.11.",
+      "if": { "required": ["filesystem"] },
+      "then": { "properties": { "schema_version": { "const": "0.2" } } }
+    }
+  ],
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "0.1",
-      "description": "Spec schema version. v0.1.x of the spec produces files with schema_version 0.1."
+      "enum": ["0.1", "0.2"],
+      "description": "Spec schema version. '0.1' (baseline) or '0.2' (adds the optional `filesystem` allowlist, SPEC §2.11). Banks accept both; skills MUST set '0.2' if they declare any 0.2-only field."
     },
     "id": {
       "type": "string",
@@ -138,6 +145,16 @@
         "description": "URL prefix (HTTPS recommended). Trailing '*' permits any continuation. '*' in host position matches one DNS label."
       },
       "uniqueItems": true
+    },
+    "filesystem": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^/[^\\0]*$",
+        "description": "Host-absolute directory path. Read-only access in sandbox mode (SPEC §2.11). Requires schema_version 0.2."
+      },
+      "uniqueItems": true,
+      "description": "Host filesystem path allowlist (read-only). Skills using this field MUST declare schema_version 0.2."
     },
     "applicable_when": {
       "type": "object",

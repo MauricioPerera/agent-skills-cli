@@ -55,9 +55,33 @@ describe("validateFrontmatter — schema rejection", () => {
     expect(r.errors.some((e) => e.message.includes("schema_version"))).toBe(true);
   });
 
-  it("rejects schema_version other than '0.1'", () => {
+  it("accepts schema_version '0.2' (added in spec v1.2 for the `filesystem` field)", () => {
     const r = validateFrontmatter({ ...MIN, schema_version: "0.2" });
+    expect(r.valid).toBe(true);
+  });
+
+  it("rejects schema_version other than the supported set ('0.1' / '0.2')", () => {
+    const r = validateFrontmatter({ ...MIN, schema_version: "9.9" });
     expect(r.valid).toBe(false);
+  });
+
+  it("rejects `filesystem` on a 0.1 skill (cross-field constraint)", () => {
+    // SPEC §2.11 mandates schema_version 0.2+ for the filesystem field.
+    const r = validateFrontmatter({
+      ...MIN,
+      schema_version: "0.1",
+      filesystem: ["/etc"],
+    });
+    expect(r.valid).toBe(false);
+  });
+
+  it("accepts `filesystem` on a 0.2 skill", () => {
+    const r = validateFrontmatter({
+      ...MIN,
+      schema_version: "0.2",
+      filesystem: ["/etc", "/var/log"],
+    });
+    expect(r.valid).toBe(true);
   });
 
   it("rejects bad id pattern (uppercase)", () => {
