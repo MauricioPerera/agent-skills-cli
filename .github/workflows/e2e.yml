@@ -342,6 +342,59 @@ jobs:
           fi
           echo "✓ TS and Python implementations produce identical identity extraction from real Sigstore CMS payload."
 
+      - name: Run TS gitsign Rekor lookup hash against fixture
+        # v0.17.1 piece: the SHA-256 of SignerInfo.SignedAttrs marshaled-for-
+        # verification (RFC 5652 §5.4). This is the hash a Level 4 verifier
+        # uses to find the corresponding Rekor entry. Both impls walk
+        # independent ASN.1 + reframe + SHA-256 paths and MUST produce the
+        # same hex digest on the same fixture.
+        run: |
+          node --input-type=module -e "
+            import { readFileSync } from 'node:fs';
+            import { computeGitsignRekorLookupHash } from './cli/dist/index.js';
+            const v = JSON.parse(readFileSync('cli/tests/fixtures/gitsign-v0.14.0-verification.json', 'utf8'));
+            console.log(computeGitsignRekorLookupHash(v.signature));
+          " > /tmp/ts-lookup-hash.txt
+          cat /tmp/ts-lookup-hash.txt
+
+      - name: Run Python gitsign Rekor lookup hash against same fixture
+        run: |
+          python -c "
+          import json, sys
+          sys.path.insert(0, 'pyproof')
+          from bank import compute_gitsign_rekor_lookup_hash
+          v = json.load(open('cli/tests/fixtures/gitsign-v0.14.0-verification.json'))
+          print(compute_gitsign_rekor_lookup_hash(v['signature']))
+          " > /tmp/py-lookup-hash.txt
+          cat /tmp/py-lookup-hash.txt
+
+      - name: Compare gitsign Rekor lookup hashes (PARITY CHECK)
+        run: |
+          ts_hash=$(cat /tmp/ts-lookup-hash.txt | tr -d '[:space:]')
+          py_hash=$(cat /tmp/py-lookup-hash.txt | tr -d '[:space:]')
+
+          echo ""
+          echo "=== gitsign Rekor lookup hash parity ==="
+          echo "TS: $ts_hash"
+          echo "PY: $py_hash"
+          echo ""
+
+          if [ "$ts_hash" != "$py_hash" ]; then
+            echo "::error::lookup hash mismatch: TS='$ts_hash' PY='$py_hash'. The CMS walker or DER reframing has drifted between implementations."
+            exit 1
+          fi
+
+          # Regression-lock: this value was computed during v0.17.1 development
+          # and validated structurally via the messageDigest invariant
+          # (RFC 5652 §11.2). If it ever changes, either the fixture changed
+          # or both walkers have a matching bug — investigate before merging.
+          expected="393d4b96fe4e0eae0fc313f5f8947c2a9782f189604d9f47ba7a66c709f2326e"
+          if [ "$ts_hash" != "$expected" ]; then
+            echo "::error::Computed hash doesn't match the v0.17.1 regression-lock value. The fixture may have been replaced or the framing logic regressed in BOTH implementations the same way (suspicious)."
+            exit 1
+          fi
+          echo "✓ TS and Python compute identical gitsign Rekor lookup hash from real Sigstore CMS payload."
+
   author-roundtrip:
     # init → publish (check-only) → resolve a scaffolded skill.
     # This is the author tooling smoke test; doesn't need Ollama (no embedding
