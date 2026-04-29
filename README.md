@@ -177,7 +177,7 @@ npm install -g @rckflr/agent-skills-cli
 npm install @rckflr/agent-skills-cli
 ```
 
-> **Pre-1.0 stability note.** API and CLI surface are evolving until v1.0. Pin a specific version in CI / production. The `@rckflr/` scope is the canonical home until v1.0 — the unscoped `agent-skills-cli` name on npm is held by an unrelated project.
+> **v1.0 stability.** STABLE library exports are semver-protected per [STABILITY.md](./STABILITY.md). Production use can pin to `^1.0.0` with confidence. The `@rckflr/` scope is the canonical home — the unscoped `agent-skills-cli` name on npm is held by an unrelated project.
 
 ### Or install from a GitHub release tag
 
@@ -208,6 +208,11 @@ The library exports are tiered (stable / experimental / internal) with explicit 
 ### Upgrading between major versions
 
 See **[MIGRATION.md](./MIGRATION.md)** for per-major-version migration notes. Minor-version upgrades within a major never require migration.
+
+### Contributing / security
+
+- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — what to work on, how to run the dev loop, cross-implementation parity rules.
+- **[SECURITY.md](./SECURITY.md)** — vulnerability reporting policy, in-scope vs out-of-scope. Threat-model context lives in the [spec's SECURITY.md](https://github.com/MauricioPerera/agent-skills/blob/main/SECURITY.md).
 
 ## End-to-end demo
 
@@ -655,7 +660,7 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.13.1 | shipped | + listAudit caching (closes the last perf debt from the post-v0.11 code review). 363/363 tests; 8/10 review issues fixed |
 | v0.13.2 | shipped | Docs alignment patch: stale install/version refs across READMEs, init scaffolded CI workflow now pins v0.13.1, BENCHMARK.md updated. Plus a hotfix for a CI type-check break introduced in v0.13.1 |
 | v0.13.3 | shipped | + `gc_protected` counter in update results (visibility into multi-sub GC); narrowed `Subscription.source_type` from `"git" \| "url"` to `"git"`. 10/10 review issues fixed |
-| v0.14.0 | shipped | + Sigstore signature **detection** (structural via PEM header — `gpg` vs `sigstore` / `gitsign`). Full Rekor inclusion-proof verification (Level 4 enforcement) queued. Cross-impl parity (TS + Python) maintained in CI |
+| v0.14.0 | shipped | + Sigstore signature **detection** (structural via PEM header — `gpg` vs `sigstore` / `gitsign`). Full Rekor inclusion-proof verification (Level 4 enforcement) was queued at the time; later parked at v1.0 pending external pull. Cross-impl parity (TS + Python) maintained in CI |
 | v0.15.0 | shipped | + SSH-tag detection (`-----BEGIN SSH SIGNATURE-----` → `"ssh"`) — fixes a v0.14 oversight. Spec patch v0.3.2: documents the **Sigstore-on-host trap** |
 | v0.16.0 | shipped | + Sigstore identity extraction: hand-rolled CMS/ASN.1 walker pulls the OIDC subject from the Fulcio cert's SAN and the issuer from extension `1.3.6.1.4.1.57264.1.1` (`/.1.8`). Surfaced as `provenance.signature_identity = { subject, subject_type, issuer }`. Zero new deps. Cross-impl parity validated against the real `sigstore/gitsign@v0.14.0` payload. Spec patch v0.3.3 |
 | v0.17.0 | shipped | + Rekor entry parsing + public-instance pinning + lookup by UUID (`parseRekorEntry`, `fetchRekorEntry`, `RekorEntry` types). Real fixture committed for offline testing. Spec patch v0.4.0: formalizes the Level 4 verification *contract* (§5.4) — what banks must do, not how |
