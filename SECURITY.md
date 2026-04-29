@@ -73,6 +73,30 @@ If you're operating at "production agent" tier and need stronger than Level 3a, 
 
 ---
 
+## Credential model
+
+**The bank is not a credential vault.** `just-bash-data` (the storage backend the v2 bank rides on) ships first-class support for AES-256-GCM encryption at rest and JWT + RBAC auth — `agent-skills-cli` deliberately does **not** use those.
+
+Why: the v2 design enforces SPEC §8 P1 (credential isolation) by **construction**, not by encryption.
+
+| Vector | Where it lives | Why not in the bank |
+|---|---|---|
+| Skill tokens (`GH_TOKEN`, `STRIPE_KEY`, …) | Operator's `process.env` | Sandbox at exec time forwards only the names declared in `required_env ∪ optional_env` (see `src/commands/exec.ts`). The LLM never sees them, the bank never persists them. |
+| Sensitive args (anything marked `sensitive: true` in `args.<name>`) | Redacted to `<redacted>` **before** `appendAudit` | `db skill_audit` only ever stores the redacted form; plaintext is GC'd before the disk write. |
+| Trusted signing material (Sigstore identities, GPG/SSH key fingerprints) | `Subscription.trusted_keys`, `SkillProvenance.signature_identity` | Public material only. Private keys never enter the bank's universe. |
+| Embedding-provider API keys (Cloudflare AI, OpenAI, Ollama) | Operator's `process.env`, read at sync time | Same model as skill tokens. Never persisted. |
+
+Encrypting the bank's `<coll>.docs.json` files at rest would protect skill ids, embeddings, commit hashes, audit timestamps, and the natural-language `intent` strings. Of those, only `intent` is plausibly sensitive (it can leak usage patterns or the operator's task descriptions); the rest is public-by-construction.
+
+### When this might warrant revisiting
+
+- **Multi-tenant shared bank.** The current model assumes one operator per bank, file-system-permission-isolated under `~/.config/agent-skills/`. If a hosted deployment serves multiple agents from one bank, just-bash-data's `authSecret` + JWT + RBAC become useful — token scopes can prevent tenant A from reading tenant B's audit trail at the storage layer (the spec §4.5.1 already describes the logical filter; this would add a cryptographic backstop).
+- **Audit privacy off-host.** If banks get backed up / synced to remote storage, encrypting `skill_audit.docs.json` with `encryptionKey` prevents the backup target from seeing intents and tenant identifiers. This is straightforward to enable (the runtime's plumbing already exists at `src/lib/runtime.ts`); it just hasn't been wired through `FileBank`.
+
+If you have either of these use cases, file an issue — the runtime is ready, only the `FileBank` constructor surface needs widening.
+
+---
+
 ## Hall of fame
 
 Vulnerabilities reported responsibly will be credited here once disclosed. Empty so far — be the first.

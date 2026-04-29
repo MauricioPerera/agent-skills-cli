@@ -278,7 +278,20 @@ export class FileBank {
     this.auditPath = join(this.rootDir, "audit.jsonl");
   }
 
-  /** Lazily build the bank-scoped just-bash runtime. */
+  /**
+   * Lazily build the bank-scoped just-bash runtime.
+   *
+   * Note: `createBankBash` accepts `encryptionKey` / `authSecret` / `salt`
+   * options that just-bash-data uses to enable AES-256-GCM at rest plus
+   * JWT + RBAC auth. The bank deliberately does NOT pass these. See
+   * SECURITY.md "Credential model" — the bank is not a credential
+   * vault by design; tokens live in the operator's `process.env` and
+   * the sandbox at exec time forwards only the names declared in
+   * `required_env ∪ optional_env`. Activating the upstream encryption
+   * here would protect public metadata (skill ids, embeddings, commit
+   * hashes, audit timestamps) without raising the bar against any
+   * concrete threat — read the SECURITY.md section before changing.
+   */
   private getBash(): Bash {
     if (this.bashInstance === null) {
       this.bashInstance = createBankBash({ bankDir: this.rootDir });
