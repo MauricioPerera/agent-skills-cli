@@ -1,7 +1,7 @@
 {
   "name": "@rckflr/agent-skills-cli",
-  "version": "0.19.0",
-  "description": "Reference CLI for the agent-skills specification: validate, sync, query, resolve, and exec skills end-to-end with audit log + Cloudflare Workers AI / Ollama / OpenAI embeddings. Pre-1.0 (API may evolve); install from npm or GitHub release.",
+  "version": "1.0.0",
+  "description": "Reference CLI for the agent-skills specification: validate, sync, query, resolve, and exec skills end-to-end with audit log + Cloudflare Workers AI / Ollama / OpenAI embeddings. Stable v1.0 — semver-protected per STABILITY.md.",
   "license": "MIT",
   "author": "Mauricio Perera",
   "repository": {

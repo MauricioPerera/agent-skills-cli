@@ -2,7 +2,9 @@
 
 This document defines the stability tiers for `@rckflr/agent-skills-cli`'s public library API and the breaking-change policy that applies to each. The CLI binary surface (`agent-skills <command>` flags) is governed separately by SPEC §6 versioning rules.
 
-This policy takes effect at **v0.19.0** as preparation for v1.0. Pre-0.19 releases were not covered.
+This policy was introduced at **v0.19.0** and **takes binding effect at v1.0.0**: from v1.0 forward, every STABLE export is protected by the deprecation rules below. Pre-0.19 releases predate the policy.
+
+For migrations between major versions, see [MIGRATION.md](./MIGRATION.md).
 
 ---
 

@@ -205,6 +205,10 @@ Walk-through with concrete example: **[PUBLISHING.md](./PUBLISHING.md)** — sca
 
 The library exports are tiered (stable / experimental / internal) with explicit breaking-change rules per tier. See **[STABILITY.md](./STABILITY.md)** before depending on programmatic exports in production.
 
+### Upgrading between major versions
+
+See **[MIGRATION.md](./MIGRATION.md)** for per-major-version migration notes. Minor-version upgrades within a major never require migration.
+
 ## End-to-end demo
 
 Pick **one** of the three embedding providers below. Everything else is identical.
@@ -659,10 +663,10 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.18.0 | tagged | Intended npm publication; tagged but never published — package.json declared scope `@mauricioperera` which doesn't exist on npm under the available auth. v0.18.1 corrects to `@rckflr` |
 | v0.18.1 | shipped | **First npm publication** as `@rckflr/agent-skills-cli`. Removes the install friction (`git clone && npm link` → `npm install -g`). Adoption blocker resolved without waiting for v1.0. No code changes vs v0.17.1 |
 | v0.18.2 | tagged-only | + `release.yml` GitHub Action (OIDC trusted publisher + provenance attestation). Tag exists in git, workflow fired, but final `PUT` to npm registry returned 404 because npm-side Trusted Publisher config isn't in place yet. Kept as historical marker; provenance attestation for this attempt lives at [Rekor logIndex 1398755825](https://search.sigstore.dev/?logIndex=1398755825) |
-| v0.18.3 | shipped | Published via granular-token-in-`~/.npmrc` (the standard pattern most solo npm publishers use; token rotates every 90 days). OIDC pipeline (`release.yml`) is in place but ran into an unresolved interaction between Trusted Publisher config and account-level 2FA-for-writes. Future v0.18.x releases will retry OIDC first |
-| **v0.19.0** | **shipped** | API stability tiers formalized for the road to v1.0. New [`STABILITY.md`](./STABILITY.md) with the breaking-change policy per tier (stable / experimental / internal). Public exports in `src/index.ts` reorganized by tier with section headers. No API removals — purely annotations + policy |
-| v0.18.x+ | planned | Rekor inclusion-proof verification (Phase 2 of Level 4). Probe in v0.18 dev caught that `@sigstore/verify`'s own `verifyMerkleInclusion` fails 0/5 against fresh real Rekor entries — the textbook RFC 6962 leaf framing doesn't match what the current Rekor tree actually uses. Investigation prerequisite: identify the real leaf framing (likely Rekor v2 proto-encoded leaf with metadata, not raw body bytes). Filed upstream so the community sees the finding |
-| v1.0.0 | planned | Stable API freeze + migration guide. **No ANN backend** — bench in [`BENCHMARK.md`](./BENCHMARK.md) confirms brute-force cosine handles 10K skills in ~20 ms; ANN is premature for any realistic deployment. If a >50K-skill user ever appears, switch `cosineSimilarity` to `Float32Array` (no new deps) before reaching for IVF |
+| v0.18.3 | shipped | Published via granular-token-in-`~/.npmrc` (the standard pattern most solo npm publishers use; token rotates every 90 days). OIDC pipeline (`release.yml`) is in place but ran into an unresolved interaction between Trusted Publisher config and account-level 2FA-for-writes. Future releases retry OIDC first |
+| v0.19.0 | shipped | API stability tiers formalized. New [`STABILITY.md`](./STABILITY.md) with the breaking-change policy per tier (stable / experimental / internal). Public exports in `src/index.ts` reorganized by tier with section headers. No API removals — purely annotations + policy |
+| **v1.0.0** | **shipped** | **Stable API freeze.** [`MIGRATION.md`](./MIGRATION.md) added (zero breaking changes vs v0.19.0). Companion spec also bumps to v1.0. From here: STABLE exports protected by semver + 6-month deprecation window before any removal. ANN/IVF backend explicitly NOT shipped — empirical bench in [`BENCHMARK.md`](./BENCHMARK.md) confirms brute-force cosine handles 10K skills in ~20 ms, no realistic deployment needs more |
+| post-1.0 | reactive | Item-by-item, driven by external pull: (a) Level 4 Rekor verification crypto if a Sigstore-signing publisher appears in the agent-skills ecosystem; (b) `Float32Array` cosine variant if a >50K-skill bank operator complains about latency; (c) ecosystem growth via second/third external pack publishers ([`OUTREACH.md`](./OUTREACH.md)). None blocked on the maintainer; all blocked on real demand |
 
 ## Continuous validation
 
