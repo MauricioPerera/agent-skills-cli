@@ -18,7 +18,7 @@ import type { Bash } from "just-bash";
 import type { SkillFrontmatter } from "../types.js";
 import { cosineSimilarity } from "./embed.js";
 import { CliError, EXIT } from "./errors.js";
-import { createBankBash, dbCount, dbFind, dbInsert, dbUpdate } from "./runtime.js";
+import { createBankBash, dbCount, dbFind, dbInsert, dbRemove, dbUpdate } from "./runtime.js";
 
 /**
  * Distinguish "file/dir not present yet" (which is normal for fresh banks)
@@ -366,73 +366,73 @@ export class FileBank {
   }
 
   // ─── Skills ──────────────────────────────────────────────────────────
+  //
+  // Backed by `db skills` per IMPLEMENTATION.md. The on-disk
+  // `skills/<hash>.json` directory is no longer read or written.
+  // The IndexedSkill type uses `identity` as the primary key; the db
+  // uses `_id` (just-bash-data convention) — mapped at the boundary.
+
+  /**
+   * Convert an IndexedSkill (app-level) to the doc shape stored in db
+   * (db convention: `_id` is the primary key). The `identity` field is
+   * preserved alongside `_id` so consumers can still see it on read.
+   */
+  private skillToDoc(skill: IndexedSkill): Record<string, unknown> {
+    return { _id: skill.identity, ...skill };
+  }
+
+  /** Strip the db-internal `_id` from a fetched doc; the app uses `identity`. */
+  private docToSkill(doc: Record<string, unknown>): IndexedSkill {
+    const { _id: _ignored, ...rest } = doc as unknown as IndexedSkill & { _id?: string };
+    return rest;
+  }
 
   async upsertSkill(skill: IndexedSkill): Promise<void> {
-    await this.ensureDir();
-    const path = join(this.skillsDir, identityToFilename(skill.identity));
-    await writeFile(path, JSON.stringify(skill, null, 2), "utf8");
+    const bash = this.getBash();
+    const exists = await dbCount(bash, "skills", { _id: skill.identity });
+    const doc = this.skillToDoc(skill);
+    if (exists === 0) {
+      await dbInsert(bash, "skills", doc);
+    } else {
+      await dbUpdate(bash, "skills", { _id: skill.identity }, { $set: doc });
+    }
     this.invalidateSkillsCache();
   }
 
   async getSkill(identity: string): Promise<IndexedSkill | null> {
-    const path = join(this.skillsDir, identityToFilename(identity));
-    try {
-      const text = await readFile(path, "utf8");
-      return JSON.parse(text) as IndexedSkill;
-    } catch {
-      return null;
-    }
+    const docs = await dbFind<Record<string, unknown>>(
+      this.getBash(),
+      "skills",
+      { _id: identity },
+      { limit: 1 },
+    );
+    if (docs.length === 0) return null;
+    return this.docToSkill(docs[0]!);
   }
 
   async listSkills(): Promise<IndexedSkill[]> {
-    // Cache hit: every previous call's result is byte-stable until the
-    // next mutator (upsertSkill / removeSkill / reset). Returns the same
-    // array reference; callers MUST treat it as read-only (they already
-    // do — IndexedSkill is conceptually immutable).
     if (this.skillsCache !== null) return this.skillsCache;
-
-    let entries: string[];
-    try {
-      entries = await readdir(this.skillsDir);
-    } catch (err) {
-      if (isMissing(err)) {
-        // Bank not synced yet. Cache the empty result so repeated cold
-        // calls don't keep retrying readdir.
-        this.skillsCache = [];
-        return this.skillsCache;
-      }
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new CliError(
-        EXIT.RUNTIME,
-        `cannot read skills directory at ${this.skillsDir}: ${msg}`,
-      );
-    }
-    const skills: IndexedSkill[] = [];
-    for (const entry of entries) {
-      if (!entry.endsWith(".json")) continue;
-      try {
-        const text = await readFile(join(this.skillsDir, entry), "utf8");
-        skills.push(JSON.parse(text) as IndexedSkill);
-      } catch {
-        // Per-entry corruption is non-fatal: the bank is a flat collection of
-        // independent skill records. A corrupt one shouldn't stop us from
-        // serving the rest. Operators can detect this via `agent-skills list`
-        // returning a smaller-than-expected count.
-      }
-    }
+    const docs = await dbFind<Record<string, unknown>>(
+      this.getBash(),
+      "skills",
+      {},
+    );
+    const skills = docs.map((d) => this.docToSkill(d));
     this.skillsCache = skills;
     return skills;
   }
 
   async removeSkill(identity: string): Promise<boolean> {
-    const path = join(this.skillsDir, identityToFilename(identity));
-    try {
-      await rm(path);
+    const result = await dbRemove(
+      this.getBash(),
+      "skills",
+      { _id: identity },
+    );
+    if (result.removed > 0) {
       this.invalidateSkillsCache();
       return true;
-    } catch {
-      return false;
     }
+    return false;
   }
 
   // ─── Vector search ───────────────────────────────────────────────────
