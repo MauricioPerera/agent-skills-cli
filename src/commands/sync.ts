@@ -134,10 +134,22 @@ export const resolveRef = async (
 
   const ownerRepo = repo.slice("github.com/".length);
 
-  // Try as tag first, then as commit/branch.
+  // Try `/commits/{ref}` FIRST. It dereferences any ref kind (branch,
+  // lightweight tag, ANNOTATED tag) to the underlying commit SHA in
+  // a single call. Hitting `/git/refs/tags/{ref}` for an annotated
+  // tag returns the *tag object's* SHA (object.type === "tag"), not
+  // the commit — and that SHA isn't fetchable via jsdelivr's
+  // `@<sha>` URL pattern, so the resulting skills-index.json fetch
+  // 404s. Verified empirically against v2.1.0 of agent-skills-pack:
+  // refs/tags returns a0c52135 (tag object); commits returns
+  // a0906001 (the commit) which jsdelivr can serve.
+  //
+  // Fallback to refs/tags is kept as a safety net for hosts where
+  // /commits/{ref} doesn't accept tag names (none observed on
+  // github.com but cheap to keep).
   const candidates = [
-    `https://api.github.com/repos/${ownerRepo}/git/refs/tags/${ref}`,
     `https://api.github.com/repos/${ownerRepo}/commits/${ref}`,
+    `https://api.github.com/repos/${ownerRepo}/git/refs/tags/${ref}`,
   ];
 
   for (const url of candidates) {
@@ -147,12 +159,41 @@ export const resolveRef = async (
       });
       if (!res.ok) continue;
       const json = (await res.json()) as
-        | { object?: { sha?: string } }
+        | { object?: { sha?: string; type?: string; url?: string } }
         | { sha?: string };
-      const sha = (json as { object?: { sha?: string } }).object?.sha
-        ?? (json as { sha?: string }).sha;
-      if (typeof sha === "string" && /^[a-f0-9]{40,}$/.test(sha)) {
-        return sha;
+
+      // /commits/{ref} → top-level `sha` IS the commit. Use it directly.
+      const directSha = (json as { sha?: string }).sha;
+      if (typeof directSha === "string" && /^[a-f0-9]{40,}$/.test(directSha)) {
+        return directSha;
+      }
+
+      // /git/refs/tags/{ref} → object.sha + object.type.
+      //   - "commit" (lightweight tag) or undefined: object.sha IS the commit.
+      //   - "tag" (annotated): object.sha is the tag object — follow
+      //     object.url to /git/tags/{tag_sha}, whose own object.sha is
+      //     the underlying commit.
+      const obj = (json as { object?: { sha?: string; type?: string; url?: string } }).object;
+      if (obj && typeof obj.sha === "string" && /^[a-f0-9]{40,}$/.test(obj.sha)) {
+        if (obj.type === "tag" && typeof obj.url === "string") {
+          try {
+            const r2 = await fetchImpl(obj.url, {
+              headers: { Accept: "application/vnd.github+json" },
+            });
+            if (r2.ok) {
+              const j2 = (await r2.json()) as { object?: { sha?: string; type?: string } };
+              const commitSha = j2.object?.sha;
+              if (typeof commitSha === "string" && /^[a-f0-9]{40,}$/.test(commitSha)) {
+                return commitSha;
+              }
+            }
+          } catch {
+            // fall through to the next candidate
+          }
+        } else {
+          // type === "commit" or undefined → trust object.sha as a commit.
+          return obj.sha;
+        }
       }
     } catch {
       // try next
