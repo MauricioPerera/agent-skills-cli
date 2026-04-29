@@ -240,5 +240,9 @@ export {
   dbUpdate,
   dbRemove,
   dbCount,
+  vecCreate,
+  vecStore,
+  vecSearch,
+  vecRemove,
 } from "./lib/runtime.js";
 export type { BashRuntimeOptions, BankBashOptions } from "./lib/runtime.js";

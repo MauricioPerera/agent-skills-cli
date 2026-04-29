@@ -260,3 +260,116 @@ export const dbCount = async (
     throw err;
   }
 };
+
+// ─── vec helpers ──────────────────────────────────────────────────────
+//
+// just-bash-data's `vec` command provides cosine-similarity vector search
+// (SPEC §4.3 / IMPLEMENTATION.md "vec store" + "vec search"). The plugin's
+// vec collections are created with an explicit `--dim` and do NOT
+// auto-create on first store. The bank must bootstrap the collection
+// once the embedding dim is known.
+
+const runVec = async (
+  bash: Bash,
+  args: string[],
+): Promise<string> => {
+  const cmd = ["vec", ...args.map(sq)].join(" ");
+  const result = await bash.exec(cmd);
+  if (result.exitCode !== 0) {
+    throw new CliError(
+      EXIT.RUNTIME,
+      `vec command failed (exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  }
+  return result.stdout;
+};
+
+/**
+ * Create a vec collection. Idempotent on dim match: a second `vec create`
+ * with the same dim is silently OK; with a different dim it surfaces
+ * the underlying validation error.
+ */
+export const vecCreate = async (
+  bash: Bash,
+  collection: string,
+  dim: number,
+): Promise<void> => {
+  const cmd = `vec create ${sq(collection)} --dim ${String(dim)}`;
+  const result = await bash.exec(cmd);
+  if (result.exitCode === 0) return;
+  // Exit 5 + stderr "collection exists" is the idempotent-create case.
+  if (result.exitCode === 5 && /collection exists/.test(result.stderr)) return;
+  throw new CliError(
+    EXIT.RUNTIME,
+    `vec create failed (exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
+  );
+};
+
+// Note: vec command convention is `vec <subcommand> <collection> <args>`,
+// the inverse of db's `db <collection> <subcommand> <args>`. The helpers
+// below reflect that.
+
+/**
+ * Store a vector for an id. Replace semantics — same id overwrites.
+ * If the collection doesn't exist yet, it's auto-created with the dim
+ * of the first stored vector (per SPEC §4.2 / §4.3 the bank uses one
+ * embedding model so all vectors share a dim, making this safe).
+ */
+export const vecStore = async (
+  bash: Bash,
+  collection: string,
+  id: string,
+  vector: number[],
+): Promise<void> => {
+  try {
+    await runVec(bash, ["store", collection, id, JSON.stringify(vector)]);
+  } catch (err) {
+    if (err instanceof CliError && /not found:/.test(err.message)) {
+      await vecCreate(bash, collection, vector.length);
+      await runVec(bash, ["store", collection, id, JSON.stringify(vector)]);
+      return;
+    }
+    throw err;
+  }
+};
+
+/** Cosine search for top-k matches against a query vector. */
+export const vecSearch = async (
+  bash: Bash,
+  collection: string,
+  queryVector: number[],
+  k: number,
+): Promise<Array<{ id: string; score: number }>> => {
+  try {
+    const out = await runVec(bash, [
+      "search",
+      collection,
+      JSON.stringify(queryVector),
+      "--k",
+      String(k),
+    ]);
+    const parsed = parseJson<Array<{ id: string; score: number; metadata?: unknown }>>(
+      out,
+      `${collection} search`,
+    );
+    return parsed.map(({ id, score }) => ({ id, score }));
+  } catch (err) {
+    if (err instanceof CliError && /not found:/.test(err.message)) return [];
+    throw err;
+  }
+};
+
+/** Remove a vector by id. Returns true if removed, false if absent. */
+export const vecRemove = async (
+  bash: Bash,
+  collection: string,
+  id: string,
+): Promise<boolean> => {
+  try {
+    await runVec(bash, ["remove", collection, id]);
+    return true;
+  } catch (err) {
+    if (err instanceof CliError && /not found:/.test(err.message)) return false;
+    throw err;
+  }
+};

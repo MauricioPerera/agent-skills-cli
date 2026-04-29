@@ -18,7 +18,18 @@ import type { Bash } from "just-bash";
 import type { SkillFrontmatter } from "../types.js";
 import { cosineSimilarity } from "./embed.js";
 import { CliError, EXIT } from "./errors.js";
-import { createBankBash, dbCount, dbFind, dbInsert, dbRemove, dbUpdate } from "./runtime.js";
+import {
+  createBankBash,
+  dbCount,
+  dbFind,
+  dbInsert,
+  dbRemove,
+  dbUpdate,
+  vecCreate,
+  vecRemove,
+  vecSearch,
+  vecStore,
+} from "./runtime.js";
 
 /**
  * Distinguish "file/dir not present yet" (which is normal for fresh banks)
@@ -302,6 +313,9 @@ export class FileBank {
       created_at: new Date().toISOString(),
     };
     await writeFile(this.metaPath, JSON.stringify(written, null, 2), "utf8");
+    // Bootstrap the vec collection now that we know the embedding dim.
+    // Idempotent: existing collection with same dim is a no-op.
+    await vecCreate(this.getBash(), "skills", meta.embedding_dim);
   }
 
   async getMeta(): Promise<BankMeta | null> {
@@ -396,6 +410,10 @@ export class FileBank {
     } else {
       await dbUpdate(bash, "skills", { _id: skill.identity }, { $set: doc });
     }
+    // Persist the embedding to the vec collection (vec store has upsert
+    // semantics — same id replaces). The collection is bootstrapped by
+    // initMeta with the right dim, so this assumes initMeta ran first.
+    await vecStore(bash, "skills", skill.identity, skill.embedding);
     this.invalidateSkillsCache();
   }
 
@@ -423,11 +441,12 @@ export class FileBank {
   }
 
   async removeSkill(identity: string): Promise<boolean> {
-    const result = await dbRemove(
-      this.getBash(),
-      "skills",
-      { _id: identity },
-    );
+    const bash = this.getBash();
+    const result = await dbRemove(bash, "skills", { _id: identity });
+    // Best-effort vec cleanup. If the vec entry is missing (e.g., a sync
+    // wrote the doc but failed before the embedding), we still want
+    // removeSkill to succeed.
+    await vecRemove(bash, "skills", identity).catch(() => false);
     if (result.removed > 0) {
       this.invalidateSkillsCache();
       return true;
@@ -436,26 +455,30 @@ export class FileBank {
   }
 
   // ─── Vector search ───────────────────────────────────────────────────
+  //
+  // Backed by `vec search` per IMPLEMENTATION.md. The vec collection is
+  // bootstrapped by initMeta with the configured embedding dim; skills
+  // are stored in it on every upsertSkill. search() does the cosine
+  // search via the data plugin, then fetches the corresponding skill
+  // doc from the db skills collection by id.
 
-  /**
-   * Brute-force cosine similarity search. Suitable for catalogs up to ~10K
-   * skills; for larger, swap in a real ANN index.
-   *
-   * Filter options:
-   *   - applicableOnly: drop skills whose applicable_when conditions don't
-   *     match the host environment (currently unimplemented; passes through).
-   */
   async search(
     queryEmbedding: number[],
     k: number = 5,
   ): Promise<SearchHit[]> {
-    const skills = await this.listSkills();
-    const scored: SearchHit[] = skills.map((s) => ({
-      skill: s,
-      score: cosineSimilarity(queryEmbedding, s.embedding),
-    }));
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, k);
+    const bash = this.getBash();
+    const hits = await vecSearch(bash, "skills", queryEmbedding, k);
+    if (hits.length === 0) return [];
+    // Fetch the corresponding skill docs by id. We could batch via $in
+    // but the bank is single-process and the k is typically <= 10.
+    const results: SearchHit[] = [];
+    for (const hit of hits) {
+      const skill = await this.getSkill(hit.id);
+      if (skill !== null) {
+        results.push({ skill, score: hit.score });
+      }
+    }
+    return results;
   }
 
   // ─── Identity resolution ─────────────────────────────────────────────
