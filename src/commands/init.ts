@@ -106,8 +106,15 @@ use_when: "the user wants to <do the thing this skill does>"
 # ─── The command (SPEC §2.5–2.6) ──────────────────────────────────────
 # Reference {placeholders} from args below. Per SPEC §2.6, placeholders
 # MUST appear in argument position (NEVER inside literal "..." or '...').
-# Reference env vars as $VAR_NAME — they're expanded by bash at exec time,
-# never seen by the agent (privacy invariant P1).
+#
+# IMPORTANT (v2.1+): the command name must resolve to either:
+#   - A just-bash built-in (echo, cat, grep, awk, jq, curl, wget, sed, …)
+#   - A just-bash-data plugin command (db, vec)
+#   - A pack-distributed CustomCommand defined in command.js next to
+#     this SKILL.md (see the scaffolded command.js for the pattern)
+# Skills that wrap host CLIs (gh, aws, kubectl, …) MUST ship a
+# command.js that adapts the host functionality — the v2 sandbox
+# does NOT expose /bin/sh.
 command_template: "echo {message}"
 
 # ─── Args (SPEC §2.4) ─────────────────────────────────────────────────
@@ -168,6 +175,47 @@ agent-skills exec ${id} --args '{"message":"hello world"}'
 - Sensitive args: none.
 `;
 };
+
+/**
+ * Optional pack-distributed CustomCommand stub (v2.1+).
+ *
+ * The scaffolded SKILL.md uses `echo`, which is a just-bash built-in,
+ * so this command.js is COMMENTED OUT in the scaffold by default. It's
+ * included here as documentation: when an author writes a skill that
+ * needs a command outside the just-bash + just-bash-data set, they
+ * uncomment this file and implement the factory.
+ *
+ * Convention: default export is a factory `(api) => Command` where
+ * api injects `defineCommand` from just-bash. The bank loads this
+ * file at sync, registers the resulting Command on its just-bash
+ * instance, and skills can invoke it by the name in command_template.
+ */
+const commandJsTemplate = (id: string): string => `// command.js — pack-distributed CustomCommand for the "${id}" skill.
+//
+// Uncomment if your skill needs a command outside the just-bash +
+// just-bash-data built-in set. The bank fetches this file at sync time
+// and registers the exported Command before running command_template.
+//
+// Default export must be a factory function:
+//   (api: { defineCommand }) => Command
+//
+// The factory pattern (vs exporting Command directly) lets the bank
+// inject defineCommand without the pack having to resolve the bare
+// "just-bash" specifier at runtime.
+
+// export default ({ defineCommand }) =>
+//   defineCommand("${id}", async (args, ctx) => {
+//     // args:   string[] from the command_template substitution
+//     // ctx:    CommandContext from just-bash (fs, env, fetch, signal, …)
+//     //
+//     // Return shape: { stdout: string, stderr: string, exitCode: number }
+//     return {
+//       stdout: "implement me\\n",
+//       stderr: "",
+//       exitCode: 0,
+//     };
+//   });
+`;
 
 const llmsTxtTemplate = (packName: string, authorName?: string): string => `# ${packName}
 
@@ -366,6 +414,10 @@ export const runInit = async (opts: InitOptions): Promise<InitResult> => {
     {
       path: join("skills", "hello-world", "SKILL.md"),
       content: skillTemplate("hello-world", opts.authorName),
+    },
+    {
+      path: join("skills", "hello-world", "command.js"),
+      content: commandJsTemplate("hello-world"),
     },
     {
       path: "llms.txt",

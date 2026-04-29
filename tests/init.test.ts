@@ -129,6 +129,7 @@ describe("runInit — pack mode", () => {
     expect(result.mode).toBe("pack");
     const expected = [
       join("skills", "hello-world", "SKILL.md"),
+      join("skills", "hello-world", "command.js"),
       "llms.txt",
       "README.md",
       ".gitignore",
@@ -198,7 +199,7 @@ describe("runInit — pack mode", () => {
 
     const second = await runInit({ name: "my-pack", pack: true, dir: tmpDir });
     expect(second.files_written).toEqual([]);
-    expect(second.files_skipped.length).toBe(5);
+    expect(second.files_skipped.length).toBe(6);
   });
 
   it("--force overwrites existing pack files", async () => {
@@ -210,7 +211,7 @@ describe("runInit — pack mode", () => {
       authorName: "Bob",
       force: true,
     });
-    expect(second.files_written.length).toBe(5);
+    expect(second.files_written.length).toBe(6);
     expect(second.files_skipped).toEqual([]);
 
     const llms = await readFile(join(tmpDir, "my-pack", "llms.txt"), "utf8");
