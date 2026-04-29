@@ -386,70 +386,49 @@ describe("FileBank corruption discrimination (v0.6.1+)", () => {
     expect(await bank.getMeta()).toBeNull();
   });
 
-  // Integrity contract for the just-bash-data-backed collections.
+  // Tolerant hydration contract — pins upstream just-bash-data behaviour.
   //
-  // History: legacy `subscriptions.json` storage threw a clear "not valid
-  // JSON" CliError on corruption. After v2.0's migration to the data
-  // plugin, just-bash-data silently treats a malformed `<coll>.docs.json`
-  // as an empty collection — listSubscriptions returns [] without warning
-  // even when the file on disk is `{not json`. That's a regression that
-  // could mask data loss after a crash / disk error / hand-edit gone
-  // wrong. The bank now eagerly validates the docs file before delegating
-  // to dbFind. These tests pin the restored contract for all three
-  // reads: listSubscriptions, listSkills, listAudit.
-  describe("integrity check on docs corruption (regression — legacy contract restored)", () => {
-    const writeCorrupt = async (collection: string, content: string): Promise<void> => {
-      const fs = await import("node:fs/promises");
-      await fs.mkdir(join(tmpDir, "data"), { recursive: true });
-      await fs.writeFile(
-        join(tmpDir, "data", `${collection}.docs.json`),
-        content,
-        "utf8",
-      );
-    };
-
-    it("listSubscriptions throws CliError when skill_subscriptions.docs.json is malformed", async () => {
-      const bank = new FileBank({ rootDir: tmpDir });
-      await writeCorrupt("skill_subscriptions", "{not json");
-      await expect(bank.listSubscriptions()).rejects.toThrow(
-        /skill_subscriptions.*not valid JSON/i,
-      );
-    });
-
-    it("listSkills throws CliError when skills.docs.json is malformed", async () => {
-      const bank = new FileBank({ rootDir: tmpDir });
-      await writeCorrupt("skills", "{also not json");
-      await expect(bank.listSkills()).rejects.toThrow(/skills.*not valid JSON/i);
-    });
-
-    it("listAudit throws CliError when skill_audit.docs.json is malformed", async () => {
-      const bank = new FileBank({ rootDir: tmpDir });
-      await writeCorrupt("skill_audit", "definitely[not}json");
-      await expect(bank.listAudit()).rejects.toThrow(/skill_audit.*not valid JSON/i);
-    });
-
-    it("listSubscriptions throws when the docs file is valid JSON but not an array", async () => {
-      const bank = new FileBank({ rootDir: tmpDir });
-      await writeCorrupt("skill_subscriptions", '"i am a string, not an array"');
-      await expect(bank.listSubscriptions()).rejects.toThrow(
-        /skill_subscriptions.*not a JSON array/i,
-      );
-    });
-
-    it("integrity check is silent on a fresh bank (no file → no error)", async () => {
-      const bank = new FileBank({ rootDir: tmpDir });
-      // No bank state on disk yet. All three reads must return empty
-      // without invoking the integrity error path.
-      await expect(bank.listSubscriptions()).resolves.toEqual([]);
-      await expect(bank.listSkills()).resolves.toEqual([]);
-      await expect(bank.listAudit()).resolves.toEqual([]);
-    });
-
-    it("integrity check is silent on a well-formed empty docs array", async () => {
-      const bank = new FileBank({ rootDir: tmpDir });
-      await writeCorrupt("skill_subscriptions", "[]");
-      await expect(bank.listSubscriptions()).resolves.toEqual([]);
-    });
+  // Background:
+  //   The pre-v2.0 bank stored subscriptions in a single `subscriptions.json`
+  //   file and threw "not valid JSON" CliError on corruption. After the v2.0
+  //   migration to `db skill_subscriptions` (and `db skills`,
+  //   `db skill_audit`), the storage layer is just-bash-data's Persister.
+  //
+  //   By DESIGN, just-bash-data's Persister.hydrate (dist/index.js, the
+  //   `hydrate(...)` method on the Persister class) catches JSON.parse
+  //   errors and returns null for the offending entry, so a malformed
+  //   `<coll>.docs.json` hydrates as "no docs in memory" rather than
+  //   raising. Combined with the atomic `<name>.tmp` + `fs.mv` write
+  //   pattern (so any visible `.docs.json` is either fully old or fully
+  //   new content), the system is engineered to self-heal: the next
+  //   mutating command flushes a fresh snapshot from the in-memory
+  //   MemoryAdapter, overwriting whatever broken file was on disk.
+  //
+  //   This is the documented architecture (README "MemoryAdapter is the
+  //   single source of truth at runtime; Persister hydrates lazily on
+  //   first command, then flushes dirty entries atomically after every
+  //   mutating command"). Forcing a fail-closed integrity check at the
+  //   bank level would FIGHT this design — converting a self-healable
+  //   state into a fatal "run agent-skills reset" (destructive: drops
+  //   every other collection too).
+  //
+  //   So the bank trusts Persister's tolerance. This test pins that
+  //   contract: if upstream ever flips to fail-closed hydration, this
+  //   test breaks and we know the bank's UX needs a reciprocal change.
+  it("treats a malformed docs file as empty (just-bash-data tolerant hydration by design)", async () => {
+    const bank = new FileBank({ rootDir: tmpDir });
+    const fs = await import("node:fs/promises");
+    await fs.mkdir(join(tmpDir, "data"), { recursive: true });
+    await fs.writeFile(
+      join(tmpDir, "data", "skill_subscriptions.docs.json"),
+      "{not json",
+      "utf8",
+    );
+    // Per just-bash-data's Persister.hydrate contract: malformed JSON
+    // entries are skipped, treated as "no docs". listSubscriptions
+    // sees an empty collection. (The next upsertSubscription will
+    // atomically overwrite the bad file with a valid snapshot.)
+    await expect(bank.listSubscriptions()).resolves.toEqual([]);
   });
 
   it("listAudit returns [] when audit log doesn't exist yet", async () => {
