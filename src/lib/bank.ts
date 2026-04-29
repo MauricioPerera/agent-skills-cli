@@ -379,22 +379,16 @@ export class FileBank {
 
   async upsertSubscription(sub: Subscription): Promise<void> {
     const { id, ...rest } = sub;
-    const bash = this.getBash();
-    // just-bash-data's `db update` does not support upsert semantics
-    // (see runtime.ts dbUpdate jsdoc). Pattern: count → insert if
-    // missing, else update. The two-step is non-atomic but acceptable
-    // for the bank's single-process model.
-    const exists = await dbCount(bash, "skill_subscriptions", { _id: id });
-    if (exists === 0) {
-      await dbInsert(bash, "skill_subscriptions", { _id: id, ...rest });
-    } else {
-      await dbUpdate(
-        bash,
-        "skill_subscriptions",
-        { _id: id },
-        { $set: { _id: id, ...rest } },
-      );
-    }
+    // dbUpdate's upsert wrapper does count → insert | update internally,
+    // so the bank no longer carries that boilerplate. See runtime.ts
+    // for the rationale (just-bash-data's --upsert is a silent no-op).
+    await dbUpdate(
+      this.getBash(),
+      "skill_subscriptions",
+      { _id: id },
+      { $set: { _id: id, ...rest } },
+      { upsert: true },
+    );
   }
 
   // ─── Skills ──────────────────────────────────────────────────────────
@@ -421,13 +415,16 @@ export class FileBank {
 
   async upsertSkill(skill: IndexedSkill): Promise<void> {
     const bash = this.getBash();
-    const exists = await dbCount(bash, "skills", { _id: skill.identity });
     const doc = this.skillToDoc(skill);
-    if (exists === 0) {
-      await dbInsert(bash, "skills", doc);
-    } else {
-      await dbUpdate(bash, "skills", { _id: skill.identity }, { $set: doc });
-    }
+    // upsert wrapper handles the count → insert | update branch; see
+    // runtime.ts for why we don't pass --upsert to just-bash-data.
+    await dbUpdate(
+      bash,
+      "skills",
+      { _id: skill.identity },
+      { $set: doc },
+      { upsert: true },
+    );
     // Persist the embedding to the vec collection (vec store has upsert
     // semantics — same id replaces). The collection is bootstrapped by
     // initMeta with the right dim, so this assumes initMeta ran first.

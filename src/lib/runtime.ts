@@ -408,8 +408,54 @@ export const dbFind = async <T = Record<string, unknown>>(
 };
 
 /**
+ * Pull the equality fields out of a filter object: keys whose value is a
+ * scalar (string / number / boolean / null) and not a Mongo operator key
+ * (`$xxx`). Used to seed the doc inserted by an upsert on a missing match.
+ *
+ * Operator-bearing filters (`$or`, `$gt`, …) intentionally don't contribute
+ * — there's no sensible scalar to insert from those. The bank's usage is
+ * always plain `{ _id: id }`, which falls cleanly into the scalar branch.
+ */
+const extractFilterScalars = (filter: Record<string, unknown>): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(filter)) {
+    if (k.startsWith("$")) continue;
+    if (
+      typeof v === "string" ||
+      typeof v === "number" ||
+      typeof v === "boolean" ||
+      v === null
+    ) {
+      out[k] = v;
+    }
+  }
+  return out;
+};
+
+/**
  * Update documents matching `filter` with `update` (MongoDB-style ops).
  * Returns the count of modified documents.
+ *
+ * `upsert: true` semantics (v2.1.1+):
+ *   When no document matches `filter`, insert a new one synthesized from
+ *   the filter's scalar equality clauses merged with `update.$set` (set
+ *   wins on key conflict). Returns `{ modified: 0, upserted: <_id> }` if
+ *   the insert produced an `_id`, else `{ modified: 0 }`.
+ *
+ *   We do this in-process via `count → insert | update` rather than
+ *   passing `--upsert` to just-bash-data, because that flag is parsed
+ *   but silently no-op'd by the plugin (verified empirically with v1.1).
+ *   Relying on it would mean upsert calls succeed-with-zero-changes
+ *   instead of inserting — a footgun the bank ran into during the
+ *   v2.0 storage migration. The wrapper hides the issue.
+ *
+ *   Caveats:
+ *     - `filter` must use scalar equality clauses for any field you want
+ *       seeded into the inserted doc. Operator keys (`$or`, `$gt`, …)
+ *       are ignored for seeding (matched-only).
+ *     - With `upsert + many`: not supported; throws. The MongoDB rule
+ *       (one upsert insert max regardless of `many`) is non-trivial to
+ *       reproduce here and the bank has no need for it.
  */
 export const dbUpdate = async (
   bash: Bash,
@@ -418,9 +464,47 @@ export const dbUpdate = async (
   update: Record<string, unknown>,
   opts: { many?: boolean; upsert?: boolean } = {},
 ): Promise<{ modified: number; upserted?: string }> => {
+  if (opts.upsert === true && opts.many === true) {
+    throw new CliError(
+      EXIT.RUNTIME,
+      `dbUpdate: { upsert: true, many: true } is not supported`,
+    );
+  }
+
+  // Upsert path: probe with count, branch insert vs update. Wrapped here
+  // so external callers don't need to repeat the pattern (and so the
+  // ignored `--upsert` flag can never bite anyone again).
+  if (opts.upsert === true) {
+    const matched = await dbCount(bash, collection, filter);
+    if (matched === 0) {
+      const setFields = update["$set"];
+      const seed = extractFilterScalars(filter);
+      const setObj =
+        typeof setFields === "object" && setFields !== null && !Array.isArray(setFields)
+          ? (setFields as Record<string, unknown>)
+          : {};
+      const doc = { ...seed, ...setObj };
+      try {
+        const inserted = await dbInsert(bash, collection, doc);
+        const insertedId =
+          typeof (inserted as { _id?: unknown })._id === "string"
+            ? ((inserted as { _id: string })._id)
+            : undefined;
+        return insertedId !== undefined
+          ? { modified: 0, upserted: insertedId }
+          : { modified: 0 };
+      } catch (err) {
+        // Re-frame so callers see "<collection> upsert insert failed: …"
+        // instead of the raw db helper message.
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new CliError(EXIT.RUNTIME, `${collection} upsert insert failed: ${msg}`);
+      }
+    }
+    // matched > 0 — fall through to the regular update path.
+  }
+
   const args = [collection, "update", JSON.stringify(filter), JSON.stringify(update)];
   if (opts.many === true) args.push("--many");
-  if (opts.upsert === true) args.push("--upsert");
   const out = await runDb(bash, args);
   return parseJson<{ modified: number; upserted?: string }>(out, `${collection} update`);
 };
