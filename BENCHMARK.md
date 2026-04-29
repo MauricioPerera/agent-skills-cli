@@ -282,11 +282,61 @@ agent-skills query "fetch the contents of a URL" --k 1 --rerank-mode global --js
 
 The full live-CF connector script that produced the table is in [`scripts/bench-v0.5.0-stress.mjs`](./scripts/bench-v0.5.0-stress.mjs) (input prep) and the raw run JSON in [`scripts/bench-v0.5.0-result.json`](./scripts/bench-v0.5.0-result.json).
 
+## Query latency at scale (v0.19.0+)
+
+Question: at what bank size does brute-force cosine-over-array become slow enough to justify an ANN backend (IVF / HNSW)?
+
+Answer: **not at any realistic agent-skills deployment size.**
+
+Bench harness: random unit-vector corpus, single random unit-vector query, full N×D cosine pass per query, no top-K sort included (sort is O(N log N) but ~10× cheaper than the cosine pass in practice). Median of 3 runs after warm-up. Hardware: developer laptop circa 2026, single Node 22 process. Reproducer at [`scripts/bench-cosine-scale.mjs`](./scripts/bench-cosine-scale.mjs).
+
+### Results
+
+| N (skills) | dim 384 (`number[]`) | dim 384 (flat `Float32Array`) | dim 768 (`number[]`) |
+|---|---|---|---|
+| 100 | **0.13 ms** | 0.14 ms | 0.23 ms |
+| 1,000 | **1.86 ms** | 1.52 ms | 3.26 ms |
+| 10,000 | **20.64 ms** | 15.24 ms | 32.45 ms |
+| 100,000 | 199 ms | 125 ms | 320 ms |
+
+The bolded column matches the current CLI implementation (`src/lib/embed.ts`'s `cosineSimilarity` over `number[]` embeddings).
+
+### Interpretation
+
+| deployment scenario | bank size | latency (current impl, 384-d) | verdict |
+|---|---|---|---|
+| Personal use, single pack | ~10 skills | < 0.1 ms | instant |
+| Personal multi-pack | 100–1,000 | 0.1–2 ms | instant |
+| Heavy individual / power user | 1,000–10,000 | 2–21 ms | instant |
+| Org fleet bank (ambitious) | 10,000–50,000 | 21–100 ms | tolerable |
+| Hypothetical mega-aggregator | > 100,000 | > 200 ms | painful, but no one is here |
+
+The agent-skills design point — banks subscribed to a few packs at a time — sits comfortably in the "instant" zone. Even an unrealistic 10K-skill bank costs ~20 ms per query, well under the 100 ms threshold where humans perceive lag.
+
+### Why an ANN backend is parked (was item C1 of the v1.0 roadmap)
+
+The original v1.0 roadmap reserved C1 for an IVF / HNSW backend swap-in. With the data above, that work is unnecessary for any realistic deployment:
+
+- Brute-force cosine handles 10K skills at 21 ms (current impl) or 15 ms (typed-array variant).
+- ANN methods (IVF/HNSW) win at the > 100K range — at the cost of approximate top-K (false negatives), index build time, and dependency on a native library (faiss) or a sub-linear graph implementation (hnswlib).
+- No agent-skills consumer is plausibly anywhere near 100K skills. Skill banks aggregate dozens of packs at most, with each pack being dozens of skills.
+
+If a 100K+-skill consumer materializes, the lowest-cost path is a one-day swap of `cosineSimilarity` with a flat-Float32Array variant (1.6× speedup, zero new deps), which buys an additional ~60% headroom. Beyond that, an ANN backend becomes the right answer — but the breakeven sits beyond any current user.
+
+### Cost of the early-optimization path we chose NOT to take
+
+If C1 had stayed on the v1.0 critical path:
+- 2–3 sessions of implementation + bench + doc work
+- A new dep (faiss bindings or hnswlib) — first native dep in the project
+- Extra surface area for maintenance, version pinning, security review
+- Approximate top-K results (different from current exact behavior — would have required spec language changes)
+
+All to defend a scaling tier no one occupies. The right call was to bench first, confirm the gap doesn't exist, and reroute those sessions.
+
 ## Future work
 
 - **Per-tenant audit scoping** for multi-tenant skill banks. Same skill, different usage histories per user.
 - Rerun with auto-generated paraphrases at N=10× scale per intent (350+ queries) for tighter confidence intervals.
-- Add a `bench` subcommand to the CLI that takes a `(intent, expected_id)[]` ground-truth file and reports top-K accuracy + score statistics.
-- Compare brute-force cosine vs IVF-style ANN search at 1K / 10K / 100K skill scale (the spec explicitly calls out IVF as the swap-in for FileBank when catalogs grow).
 - Test cross-language: index English skills, query in Spanish/Japanese with bge-m3.
 - Evaluate a non-BGE model family (`@cf/google/embeddinggemma-300m`) for trade-off coverage.
+- **If a 50K+-skill consumer ever appears**: swap `cosineSimilarity` from `number[]` to `Float32Array` (small change, ~1.5× speedup, no new deps) before reaching for ANN. Beyond ~200K skills, revisit the IVF/HNSW decision with their concrete workload as input.

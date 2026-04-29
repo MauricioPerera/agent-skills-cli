@@ -662,7 +662,7 @@ Full type definitions are exported. See `src/types.ts`.
 | v0.18.3 | shipped | Published via granular-token-in-`~/.npmrc` (the standard pattern most solo npm publishers use; token rotates every 90 days). OIDC pipeline (`release.yml`) is in place but ran into an unresolved interaction between Trusted Publisher config and account-level 2FA-for-writes. Future v0.18.x releases will retry OIDC first |
 | **v0.19.0** | **shipped** | API stability tiers formalized for the road to v1.0. New [`STABILITY.md`](./STABILITY.md) with the breaking-change policy per tier (stable / experimental / internal). Public exports in `src/index.ts` reorganized by tier with section headers. No API removals — purely annotations + policy |
 | v0.18.x+ | planned | Rekor inclusion-proof verification (Phase 2 of Level 4). Probe in v0.18 dev caught that `@sigstore/verify`'s own `verifyMerkleInclusion` fails 0/5 against fresh real Rekor entries — the textbook RFC 6962 leaf framing doesn't match what the current Rekor tree actually uses. Investigation prerequisite: identify the real leaf framing (likely Rekor v2 proto-encoded leaf with metadata, not raw body bytes). Filed upstream so the community sees the finding |
-| v1.0.0 | planned | IVF-style ANN backend; stable API freeze |
+| v1.0.0 | planned | Stable API freeze + migration guide. **No ANN backend** — bench in [`BENCHMARK.md`](./BENCHMARK.md) confirms brute-force cosine handles 10K skills in ~20 ms; ANN is premature for any realistic deployment. If a >50K-skill user ever appears, switch `cosineSimilarity` to `Float32Array` (no new deps) before reaching for IVF |
 
 ## Continuous validation
 
