@@ -473,6 +473,15 @@ const runVec = async (
   const cmd = ["vec", ...args.map(sq)].join(" ");
   const result = await bash.exec(cmd);
   if (result.exitCode !== 0) {
+    // Same sentinel as runDb. just-bash-data emits identical
+    // "exit 3 + stderr 'not found: <coll>'" framing for both `db` and
+    // `vec` when the underlying collection is absent, so a single
+    // detection rule + sentinel covers both. Callers (vecStore,
+    // vecSearch, vecRemove) translate it to their own semantics.
+    const missing = isCollectionNotFound(result.exitCode, result.stderr);
+    if (missing !== null) {
+      throw new CollectionNotFound(missing);
+    }
     throw new CliError(
       EXIT.RUNTIME,
       `vec command failed (exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
@@ -521,7 +530,7 @@ export const vecStore = async (
   try {
     await runVec(bash, ["store", collection, id, JSON.stringify(vector)]);
   } catch (err) {
-    if (err instanceof CliError && /not found:/.test(err.message)) {
+    if (err instanceof CollectionNotFound) {
       await vecCreate(bash, collection, vector.length);
       await runVec(bash, ["store", collection, id, JSON.stringify(vector)]);
       return;
@@ -551,12 +560,23 @@ export const vecSearch = async (
     );
     return parsed.map(({ id, score }) => ({ id, score }));
   } catch (err) {
-    if (err instanceof CliError && /not found:/.test(err.message)) return [];
+    if (err instanceof CollectionNotFound) return [];
     throw err;
   }
 };
 
-/** Remove a vector by id. Returns true if removed, false if absent. */
+/**
+ * Remove a vector by id. Returns true if removed, false if absent.
+ *
+ * Two flavors of "absent" are folded into `false`:
+ *   - the collection itself doesn't exist (CollectionNotFound from runVec)
+ *   - the collection exists but doesn't contain the id (just-bash-data
+ *     emits a non-3 exit with a "not found:" message that doesn't match
+ *     the collection-level framing — we still want false here, hence the
+ *     fallback regex on CliError messages).
+ *
+ * Anything else propagates.
+ */
 export const vecRemove = async (
   bash: Bash,
   collection: string,
@@ -566,6 +586,7 @@ export const vecRemove = async (
     await runVec(bash, ["remove", collection, id]);
     return true;
   } catch (err) {
+    if (err instanceof CollectionNotFound) return false;
     if (err instanceof CliError && /not found:/.test(err.message)) return false;
     throw err;
   }
