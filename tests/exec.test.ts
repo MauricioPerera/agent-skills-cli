@@ -205,11 +205,14 @@ describe("runExec — audit log persistence", () => {
       args: { msg: "second" },
     });
 
-    const auditFile = await readFile(join(tmpDir, "audit.jsonl"), "utf8");
-    const lines = auditFile.split("\n").filter((l) => l.length > 0);
-    expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0] as string).args).toEqual({ msg: "first" });
-    expect(JSON.parse(lines[1] as string).args).toEqual({ msg: "second" });
+    // Audit storage migrated to `db skill_audit` (commit 3c7d412+);
+    // the legacy audit.jsonl path is no longer written. Assert via the
+    // bank's listAudit() public API, which is the contract callers see.
+    const entries = await bank.listAudit();
+    expect(entries).toHaveLength(2);
+    // listAudit returns newest-first, so the second exec is index 0.
+    expect(entries[0]?.args).toEqual({ msg: "second" });
+    expect(entries[1]?.args).toEqual({ msg: "first" });
   });
 
   it("listAudit returns entries newest-first with stdout/stderr byte counts", async () => {
@@ -260,8 +263,11 @@ describe("runExec — audit log persistence", () => {
     expect(entries[0]?.args.public).toBe("hello");
     expect(entries[0]?.args.secret).toBe("<redacted>");
 
-    const auditFile = await readFile(join(tmpDir, "audit.jsonl"), "utf8");
-    expect(auditFile).not.toContain("p@ssw0rd-DO-NOT-LOG");
+    // Verify the secret never reaches persisted audit storage. Audit
+    // backed by `db skill_audit` (commit 3c7d412+); query the entries
+    // and serialize to confirm the secret string never appears.
+    const allEntries = await bank.listAudit();
+    expect(JSON.stringify(allEntries)).not.toContain("p@ssw0rd-DO-NOT-LOG");
   });
 
   it("records the optional intent field when provided", async () => {

@@ -500,70 +500,52 @@ export class FileBank {
     );
   }
 
-  // ─── Audit log (append-only JSONL) ──────────────────────────────────
+  // ─── Audit log ──────────────────────────────────────────────────────
+  //
+  // Backed by `db skill_audit` per IMPLEMENTATION.md. The on-disk
+  // `audit.jsonl` file is no longer read or written. Just-bash-data's
+  // db is append-friendly (insert is the canonical path); ordering is
+  // preserved by the order entries land. AuditEntry has no native id
+  // field, so we synthesize a monotonic `_id` from the timestamp +
+  // skill_id for stable ordering and uniqueness across rapid appends.
 
-  /**
-   * Append a single audit entry. JSONL format: one JSON object per line.
-   * Append-only so the log is tamper-evident at the filesystem level.
-   */
+  /** Build a stable `_id` from the entry. Used as the db primary key. */
+  private auditId(entry: AuditEntry, ord: number): string {
+    return `${entry.timestamp}#${ord}#${entry.skill_id}`;
+  }
+
   async appendAudit(entry: AuditEntry): Promise<void> {
-    await this.ensureDir();
-    const line = JSON.stringify(entry) + "\n";
-    await appendFile(this.auditPath, line, "utf8");
-    // If we have a cache, keep it in sync rather than invalidating: the
-    // exec → next query path is the common case and benefits from O(1)
-    // append. If the cache is null, leave it null — next listAudit will
-    // build it fresh. (Don't fill the cache here on cold paths; that's
-    // listAudit's responsibility.)
+    const bash = this.getBash();
+    // Order suffix avoids collisions when multiple entries share the
+    // same timestamp millisecond on fast loops.
+    const existing = await dbCount(bash, "skill_audit", { skill_id: entry.skill_id });
+    const _id = this.auditId(entry, existing);
+    await dbInsert(bash, "skill_audit", { _id, ...entry } as Record<string, unknown>);
     if (this.auditCacheAll !== null) {
       this.auditCacheAll.push(entry);
     }
   }
 
-  /**
-   * Read recent audit entries, optionally filtered by skill_id. Returns the
-   * MOST RECENT first (newest at index 0).
-   *
-   * Caching (v0.13.1+): the parsed audit log is cached in file order on
-   * the FileBank instance. Filters / reverse / slice run on every call
-   * but skip the parse + I/O work once the cache is warm. appendAudit
-   * extends the cache; reset drops it.
-   */
   async listAudit(opts: { limit?: number; skill_id?: string } = {}): Promise<AuditEntry[]> {
     let all = this.auditCacheAll;
     if (all === null) {
-      let text: string;
-      try {
-        text = await readFile(this.auditPath, "utf8");
-      } catch (err) {
-        if (isMissing(err)) {
-          // No audit log yet. Cache the empty result so repeated cold
-          // calls don't keep re-attempting the read.
-          this.auditCacheAll = [];
-          return [];
-        }
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new CliError(
-          EXIT.RUNTIME,
-          `cannot read audit log at ${this.auditPath}: ${msg}`,
-        );
-      }
-      const lines = text.split("\n").filter((l) => l.length > 0);
-      all = [];
-      for (const line of lines) {
-        try {
-          all.push(JSON.parse(line) as AuditEntry);
-        } catch {
-          // skip corrupt lines (the whole point of JSONL is partial-failure resilience)
-        }
-      }
+      const filter = opts.skill_id !== undefined ? { skill_id: opts.skill_id } : {};
+      const docs = await dbFind<Record<string, unknown>>(
+        this.getBash(),
+        "skill_audit",
+        filter,
+      );
+      // Strip db's `_id` field; AuditEntry doesn't include it.
+      all = docs.map((d) => {
+        const { _id: _ignored, ...rest } = d;
+        return rest as unknown as AuditEntry;
+      });
       this.auditCacheAll = all;
     }
 
-    // Apply filters on the cached set.
     const filtered = opts.skill_id !== undefined
       ? all.filter((e) => e.skill_id === opts.skill_id)
-      : all.slice(); // copy so .reverse() doesn't mutate the cache
+      : all.slice();
 
     filtered.reverse(); // newest first
     return opts.limit !== undefined ? filtered.slice(0, opts.limit) : filtered;
