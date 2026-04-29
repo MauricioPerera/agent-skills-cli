@@ -226,3 +226,19 @@ export type { UrlTemplateContext } from "./lib/url.js";
 // is a perf optimization; the rerank API is stable but the cache shape
 // is implementation detail.
 export { IntentEmbeddingCache } from "./lib/intent-cache.js";
+
+// just-bash runtime + db helpers per SPEC §4.4 / IMPLEMENTATION.md.
+// Exposed for downstream tooling that wants to issue db/vec commands
+// against the same bank state the CLI uses. EXPERIMENTAL while the
+// storage migration is in progress.
+export {
+  createBashRuntime,
+  createBankBash,
+  runBashCommand,
+  dbInsert,
+  dbFind,
+  dbUpdate,
+  dbRemove,
+  dbCount,
+} from "./lib/runtime.js";
+export type { BashRuntimeOptions, BankBashOptions } from "./lib/runtime.js";
