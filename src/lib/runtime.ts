@@ -14,9 +14,11 @@
 //   - dbFind / dbInsert / dbUpdate / dbRemove — typed helpers for issuing
 //     `db <coll> <op>` commands and parsing the JSON result.
 
-import { Bash, ReadWriteFs, type ExecOptions } from "just-bash";
+import { Bash, ReadWriteFs, type ExecOptions, type NetworkConfig } from "just-bash";
 import { createDataPlugin } from "just-bash-data";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { CliError, EXIT } from "./errors.js";
 
@@ -53,6 +55,59 @@ export const createBashRuntime = (opts: BashRuntimeOptions = {}): Bash =>
       salt: opts.salt,
     }),
   });
+
+export interface SandboxedExecOptions extends BashRuntimeOptions {
+  /**
+   * Network allowlist per SPEC §2.10. Each entry is a full origin
+   * (scheme + host) optionally followed by a path prefix. When empty,
+   * no network access is permitted.
+   */
+  network?: string[];
+}
+
+/**
+ * Sandboxed runtime for executing one skill, per SPEC §4.4 sandbox mode.
+ *
+ * - Filesystem restricted to a fresh per-skill scratch dir (exposed as
+ *   `$AGENT_SCRATCH` to the skill).
+ * - Network restricted to the skill's declared `network` allowlist.
+ *   (Empty network → no HTTP access.)
+ * - Process spawning bounded by just-bash's "no `/bin/sh` reachable"
+ *   property (only registered CustomCommands are callable).
+ *
+ * Returns the Bash instance plus the scratch path. Caller is responsible
+ * for cleaning up the scratch dir after the exec completes (this gives
+ * the bank a chance to inspect outputs before deletion).
+ */
+export const createSandboxedExec = (
+  opts: SandboxedExecOptions = {},
+): { bash: Bash; scratchDir: string } => {
+  const scratchDir = mkdtempSync(join(tmpdir(), "agent-skills-scratch-"));
+  const network: NetworkConfig | undefined =
+    opts.network !== undefined && opts.network.length > 0
+      ? { allowedUrlPrefixes: opts.network }
+      : undefined;
+  const bash = new Bash({
+    fs: new ReadWriteFs({ root: scratchDir }),
+    customCommands: createDataPlugin({
+      rootDir: opts.rootDir ?? "/data",
+      encryptionKey: opts.encryptionKey,
+      authSecret: opts.authSecret,
+      salt: opts.salt,
+    }),
+    ...(network !== undefined ? { network } : {}),
+  });
+  return { bash, scratchDir };
+};
+
+/** Recursively remove a scratch dir created by createSandboxedExec. */
+export const cleanupScratch = (scratchDir: string): void => {
+  try {
+    rmSync(scratchDir, { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
+};
 
 /**
  * Bank-scoped runtime backed by a real host directory. Two Bash

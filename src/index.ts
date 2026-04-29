@@ -234,6 +234,8 @@ export { IntentEmbeddingCache } from "./lib/intent-cache.js";
 export {
   createBashRuntime,
   createBankBash,
+  createSandboxedExec,
+  cleanupScratch,
   runBashCommand,
   dbInsert,
   dbFind,
@@ -245,4 +247,8 @@ export {
   vecSearch,
   vecRemove,
 } from "./lib/runtime.js";
-export type { BashRuntimeOptions, BankBashOptions } from "./lib/runtime.js";
+export type {
+  BashRuntimeOptions,
+  BankBashOptions,
+  SandboxedExecOptions,
+} from "./lib/runtime.js";

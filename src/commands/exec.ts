@@ -15,7 +15,7 @@ import type { SkillFrontmatter } from "../types.js";
 import { CliError, EXIT } from "../lib/errors.js";
 import { resolveCommand } from "../lib/substitute.js";
 import { validateSkill } from "../lib/validate.js";
-import { createBashRuntime, runBashCommand } from "../lib/runtime.js";
+import { cleanupScratch, createSandboxedExec, runBashCommand } from "../lib/runtime.js";
 
 /**
  * Strip bank-managed fields from an IndexedSkill, leaving only the original
@@ -75,34 +75,40 @@ export interface ExecResult {
 }
 
 /**
- * Run the substituted `command_template` via the just-bash runtime
- * (per SPEC §4.4 + IMPLEMENTATION.md "exec-skill.sh"). The host shell
- * is NOT invoked — execution happens inside just-bash's AST interpreter
- * with the just-bash-data `db`/`vec` commands available.
+ * Run the substituted `command_template` via a SANDBOXED just-bash
+ * runtime per SPEC §4.4. Sandbox primitives applied:
  *
- * Per SPEC §4.4 sandbox model, env access is scoped to the skill's
- * declared `required_env ∪ optional_env`. This preserves the P1 invariant
- * (SPEC §8 + SECURITY.md §P1) — the host's `$STRIPE_KEY` etc. are
- * substituted by the shell at exec time only when the skill declared
- * them, and never reach the LLM context.
+ * - **Filesystem**: a fresh per-skill scratch directory (exposed via
+ *   `$AGENT_SCRATCH`). Skill cannot read/write outside that root.
+ * - **Network**: restricted to the skill's declared `network` allowlist.
+ *   Empty/missing `network` means no HTTP access at all.
+ * - **Env vars**: scoped to `required_env ∪ optional_env`. Other host
+ *   env is invisible to the skill (preserves SPEC §8 P1 — credentials
+ *   the skill didn't declare don't leak).
+ * - **Process spawning**: just-bash by design only allows registered
+ *   CustomCommands and built-ins; no `/bin/sh` fallback (SPEC §4.4
+ *   "Prevent process spawning beyond required_commands").
+ *
+ * Scratch dir is cleaned up after the exec finishes, regardless of
+ * whether the command succeeded or timed out.
  */
 const runBash = async (
   command: string,
   timeoutSec: number,
   envWhitelist: string[],
+  network: string[],
 ): Promise<{ exit_code: number; stdout: string; stderr: string; elapsed_ms: number; timed_out: boolean }> => {
-  // One Bash instance per exec call. Stateless across invocations (which
-  // matches the previous spawn-per-exec semantics). Storage migration to
-  // a long-lived bank-scoped Bash instance is a follow-up commit.
-  const bash = createBashRuntime();
-  // Forward only the env vars the skill declared; just-bash provides its
-  // own PATH/HOME defaults, which we don't override.
-  const env: Record<string, string> = {};
-  for (const name of envWhitelist) {
-    const value = process.env[name];
-    if (typeof value === "string") env[name] = value;
+  const { bash, scratchDir } = createSandboxedExec({ network });
+  try {
+    const env: Record<string, string> = { AGENT_SCRATCH: scratchDir };
+    for (const name of envWhitelist) {
+      const value = process.env[name];
+      if (typeof value === "string") env[name] = value;
+    }
+    return await runBashCommand(bash, command, timeoutSec, { env });
+  } finally {
+    cleanupScratch(scratchDir);
   }
-  return runBashCommand(bash, command, timeoutSec, { env });
 };
 
 /**
@@ -161,14 +167,16 @@ export const runExec = async (opts: ExecOptions): Promise<ExecResult> => {
     };
   }
 
-  // 5. Execute via just-bash with a timeout, scoping env access to the
-  //    skill's declared required_env ∪ optional_env per SPEC §4.4.
+  // 5. Execute via the sandboxed just-bash per SPEC §4.4. Env, network,
+  //    and FS access are scoped to what the skill declared in its
+  //    frontmatter; nothing else reaches the running command.
   const timeoutSec = opts.timeoutSec ?? 60;
   const envWhitelist = [
     ...(frontmatter.required_env ?? []),
     ...(frontmatter.optional_env ?? []),
   ];
-  const result = await runBash(resolved.command, timeoutSec, envWhitelist);
+  const network = frontmatter.network ?? [];
+  const result = await runBash(resolved.command, timeoutSec, envWhitelist, network);
 
   // 6. Audit (unless --no-audit)
   if (opts.noAudit !== true) {
