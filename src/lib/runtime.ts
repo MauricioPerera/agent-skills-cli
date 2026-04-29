@@ -14,7 +14,17 @@
 //   - dbFind / dbInsert / dbUpdate / dbRemove — typed helpers for issuing
 //     `db <coll> <op>` commands and parsing the JSON result.
 
-import { Bash, ReadWriteFs, type ExecOptions, type NetworkConfig } from "just-bash";
+import {
+  Bash,
+  ReadWriteFs,
+  defineCommand,
+  type Command,
+  type CommandContext,
+  type CustomCommand,
+  type ExecOptions,
+  type ExecResult,
+  type NetworkConfig,
+} from "just-bash";
 import { createDataPlugin } from "just-bash-data";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,7 +73,71 @@ export interface SandboxedExecOptions extends BashRuntimeOptions {
    * no network access is permitted.
    */
   network?: string[];
+  /**
+   * Pack-distributed CustomCommands to register alongside the data
+   * plugin. Loaded by the bank from `command.js` files shipped in the
+   * skill's pack directory (v2.1.0+).
+   */
+  extraCommands?: CustomCommand[];
 }
+
+/**
+ * The API surface a pack-distributed `command.js` receives when the bank
+ * loads it. Stable contract per v2.1.0+; new fields can be added in
+ * minor releases without breaking existing packs.
+ */
+export interface PackCommandApi {
+  /** Same as just-bash's defineCommand. The pack uses this to build its Command. */
+  defineCommand: (
+    name: string,
+    execute: (args: string[], ctx: CommandContext) => Promise<ExecResult>,
+  ) => Command;
+}
+
+/**
+ * Dynamically import a pack-distributed CustomCommand from raw JS source.
+ *
+ * Pack convention (v2.1.0+): each skill directory MAY contain a
+ * `command.js` ESM module whose default export is a **factory function**
+ * `(api: PackCommandApi) => Command`. The factory pattern is used (vs
+ * exporting the Command directly) so the pack does not need to resolve
+ * the bare specifier `"just-bash"` at runtime — the bank injects
+ * `defineCommand` instead.
+ *
+ * Example pack-side `command.js`:
+ *
+ *   export default ({ defineCommand }) =>
+ *     defineCommand("gh-pr-summary", async (args, ctx) => {
+ *       // ... do work, return ExecResult
+ *     });
+ *
+ * The bank fetches this file on sync and stores it on the indexed skill.
+ * At exec time the source is `import()`ed via a `data:` URL, the factory
+ * is called with the bank's `PackCommandApi`, and the resulting Command
+ * is registered on the sandboxed Bash instance before running
+ * `command_template`.
+ *
+ * Returns the Command, or `null` on any import / shape failure — a null
+ * result means the skill falls back to just-bash defaults (built-ins +
+ * just-bash-data); commands referenced in `command_template` that aren't
+ * available will fail with "command not found" at exec.
+ */
+export const loadCustomCommandFromSource = async (
+  source: string,
+): Promise<Command | null> => {
+  try {
+    const dataUrl = `data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`;
+    const mod = (await import(dataUrl)) as { default?: unknown };
+    if (typeof mod.default !== "function") return null;
+    const factory = mod.default as (api: PackCommandApi) => unknown;
+    const cmd = factory({ defineCommand }) as Command | null;
+    if (cmd === null || cmd === undefined) return null;
+    if (typeof cmd.name !== "string" || typeof cmd.execute !== "function") return null;
+    return cmd;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Sandboxed runtime for executing one skill, per SPEC §4.4 sandbox mode.
@@ -87,14 +161,18 @@ export const createSandboxedExec = (
     opts.network !== undefined && opts.network.length > 0
       ? { allowedUrlPrefixes: opts.network }
       : undefined;
+  const dataCmds = createDataPlugin({
+    rootDir: opts.rootDir ?? "/data",
+    encryptionKey: opts.encryptionKey,
+    authSecret: opts.authSecret,
+    salt: opts.salt,
+  });
+  const customCommands: CustomCommand[] = opts.extraCommands !== undefined
+    ? [...dataCmds, ...opts.extraCommands]
+    : dataCmds;
   const bash = new Bash({
     fs: new ReadWriteFs({ root: scratchDir }),
-    customCommands: createDataPlugin({
-      rootDir: opts.rootDir ?? "/data",
-      encryptionKey: opts.encryptionKey,
-      authSecret: opts.authSecret,
-      salt: opts.salt,
-    }),
+    customCommands,
     ...(network !== undefined ? { network } : {}),
   });
   return { bash, scratchDir };

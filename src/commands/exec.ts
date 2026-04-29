@@ -15,7 +15,13 @@ import type { SkillFrontmatter } from "../types.js";
 import { CliError, EXIT } from "../lib/errors.js";
 import { resolveCommand } from "../lib/substitute.js";
 import { validateSkill } from "../lib/validate.js";
-import { cleanupScratch, createSandboxedExec, runBashCommand } from "../lib/runtime.js";
+import {
+  cleanupScratch,
+  createSandboxedExec,
+  loadCustomCommandFromSource,
+  runBashCommand,
+} from "../lib/runtime.js";
+import type { CustomCommand } from "just-bash";
 
 /**
  * Strip bank-managed fields from an IndexedSkill, leaving only the original
@@ -97,8 +103,9 @@ const runBash = async (
   timeoutSec: number,
   envWhitelist: string[],
   network: string[],
+  extraCommands: CustomCommand[],
 ): Promise<{ exit_code: number; stdout: string; stderr: string; elapsed_ms: number; timed_out: boolean }> => {
-  const { bash, scratchDir } = createSandboxedExec({ network });
+  const { bash, scratchDir } = createSandboxedExec({ network, extraCommands });
   try {
     const env: Record<string, string> = { AGENT_SCRATCH: scratchDir };
     for (const name of envWhitelist) {
@@ -170,13 +177,22 @@ export const runExec = async (opts: ExecOptions): Promise<ExecResult> => {
   // 5. Execute via the sandboxed just-bash per SPEC §4.4. Env, network,
   //    and FS access are scoped to what the skill declared in its
   //    frontmatter; nothing else reaches the running command.
+  //
+  //    If the pack shipped a CustomCommand alongside the SKILL.md
+  //    (v2.1.0+ convention), load it now and register on the bash
+  //    instance before running command_template.
   const timeoutSec = opts.timeoutSec ?? 60;
   const envWhitelist = [
     ...(frontmatter.required_env ?? []),
     ...(frontmatter.optional_env ?? []),
   ];
   const network = frontmatter.network ?? [];
-  const result = await runBash(resolved.command, timeoutSec, envWhitelist, network);
+  const extraCommands: CustomCommand[] = [];
+  if (typeof skill.command_source === "string" && skill.command_source.length > 0) {
+    const loaded = await loadCustomCommandFromSource(skill.command_source);
+    if (loaded !== null) extraCommands.push(loaded);
+  }
+  const result = await runBash(resolved.command, timeoutSec, envWhitelist, network, extraCommands);
 
   // 6. Audit (unless --no-audit)
   if (opts.noAudit !== true) {

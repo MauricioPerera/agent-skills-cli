@@ -236,6 +236,7 @@ export {
   createBankBash,
   createSandboxedExec,
   cleanupScratch,
+  loadCustomCommandFromSource,
   runBashCommand,
   dbInsert,
   dbFind,

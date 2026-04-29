@@ -122,6 +122,24 @@ export interface IndexedSkill extends SkillFrontmatter {
   embedding_model: string;
   inserted_at: string;
   updated_at: string;
+  /**
+   * Optional pack-distributed CustomCommand source (v2.1.0+).
+   *
+   * When a skill's directory contains `command.js` alongside `SKILL.md`,
+   * the bank fetches it on sync and stores the source here. At exec
+   * time the bank dynamically imports it (ESM, default export must be
+   * a `Command` from just-bash) and registers it with the just-bash
+   * runtime before running the skill's command_template.
+   *
+   * This is the spec-conformant way for packs to extend the runtime
+   * beyond just-bash built-ins + just-bash-data — without it, skills
+   * that need host CLIs (`gh`, `aws`, `kubectl`, …) can't run.
+   *
+   * The source is the raw JS text fetched from the CDN. Pack authors
+   * SHOULD ship pre-compiled JS (TS authoring fine; compile in pack
+   * build pipeline before publishing).
+   */
+  command_source?: string;
 }
 
 export interface BankMeta {

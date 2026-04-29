@@ -352,6 +352,23 @@ const syncSingleSkill = async (params: {
     return { id: entry.id, status: "error", message: `embedding failed: ${msg}` };
   }
 
+  // Best-effort fetch of the pack-distributed CustomCommand source
+  // (v2.1.0+ convention). The bank looks for `command.js` next to the
+  // SKILL.md by deriving its URL from the SKILL.md URL. A 404 is
+  // expected and silent: not every skill ships a CustomCommand.
+  let commandSource: string | undefined;
+  const commandUrl = url.replace(/\/SKILL\.md$/, "/command.js");
+  if (commandUrl !== url) {
+    try {
+      const res = await fetchImpl(commandUrl);
+      if (res.ok) {
+        commandSource = await res.text();
+      }
+    } catch {
+      // network errors fetching command.js are non-fatal
+    }
+  }
+
   // Compute identity per SPEC §1
   const identity = `${repo}@${sha}/${entry.id}`;
   const now = new Date().toISOString();
@@ -374,6 +391,7 @@ const syncSingleSkill = async (params: {
     embedding_model: embedder.name,
     inserted_at: now,
     updated_at: now,
+    ...(commandSource !== undefined ? { command_source: commandSource } : {}),
   });
 
   return { id: entry.id, identity, status: "synced" };
