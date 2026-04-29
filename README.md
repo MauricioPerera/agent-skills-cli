@@ -15,6 +15,40 @@ The full skill-bank pipeline (sync, embed, query, audit) is delegated to runtime
 
 ## Status
 
+**v2.2.0 + spec v1.2** — `filesystem` allowlist (SPEC §2.11). Sandboxed banks can now grant skills read-only access to declared host directories alongside `$AGENT_SCRATCH`. Closes the gap that made `read-file` and `ripgrep-search` unusable in v2 sandboxed runtimes (the v1.1 sandbox restricted FS to scratch-only).
+
+```yaml
+# In SKILL.md (schema_version: "0.2"):
+filesystem:
+  - "/etc"
+  - "/var"
+  - "/home"
+  - "/tmp"
+```
+
+The runtime mounts each declared path read-only via just-bash's `MountableFs` + `OverlayFs`. Writes still go exclusively to `$AGENT_SCRATCH` — `filesystem` is a *read* allowlist, not a write one. Non-existent paths are skipped with a stderr warning (a portable pack can declare `/etc` and run on Windows where it doesn't exist; the bank just doesn't mount it).
+
+Reference pack [`agent-skills-pack`](https://github.com/MauricioPerera/agent-skills-pack) v2.2.0 ships `read-file` v2.0.0 and `ripgrep-search` v2.0.0 with `filesystem: ["/etc", "/var", "/home", "/tmp", "/usr"]`. End-to-end demonstrated against real Cloudflare Workers AI (Gemma 300M for embeddings + Granite 4.0 h-micro for skill picking + arg extraction): an LLM can now drive `read-file /tmp/some-file.txt` autonomously through the sandbox.
+
+---
+
+**v2.1.0 + spec v1.1** — pack-distributed CustomCommands (SPEC §3.4). Skills can ship a `command.js` factory alongside `SKILL.md` that the bank loads at sync time and registers on the just-bash runtime before exec.
+
+```js
+// skills/github-issue-create/command.js
+export default ({ defineCommand }) =>
+  defineCommand("gh", async (args, ctx) => {
+    // ... call GitHub REST API directly using ctx.env.GH_TOKEN
+    return { stdout: issue_url + "\n", stderr: "", exitCode: 0 };
+  });
+```
+
+The factory pattern (vs exporting the Command directly) avoids the bare specifier `"just-bash"` resolution problem when loading the source via `data:` URL. The CLI's `loadCustomCommandFromSource` returns a structured `LoadFailureReason` on shape errors so pack authors get diagnosable feedback (no more silent "command not found").
+
+Closes the gap that prevented v2 sandboxed banks from running skills that wrap host CLIs (`gh`, `aws`, `kubectl`). Reference pack ships `github-issue-create` v2.0.0 with a CustomCommand wrapping the GitHub REST API.
+
+---
+
 **v0.12.0** — per-tenant audit scoping. Multi-tenant skill-bank deployments (shared CI bots, team setups, multi-user agents) get isolation: Alice's heavy use of `base64-encode` no longer bleeds into Bob's intent-conditional rerank.
 
 ```bash

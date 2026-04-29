@@ -1,5 +1,8 @@
 // CLI entrypoint for `agent-skills`. Invoked via the bin shim in package.json.
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { FileBank, defaultBankRoot } from "./lib/bank.js";
 import { resolveEmbedderFromEnv } from "./lib/embed.js";
 import { CliError, EXIT, isCliError } from "./lib/errors.js";
@@ -14,7 +17,37 @@ import { printInitResult, runInit } from "./commands/init.js";
 import { printUpdateResult, runUpdate } from "./commands/update.js";
 import { parseArgv, parseRerankMode, parseTenantFlag } from "./lib/cli-args.js";
 
-const VERSION = "0.14.0";
+/**
+ * Resolve the package version at runtime by reading package.json.
+ *
+ * Why: hardcoding the version string here drifted (was "0.14.0" while
+ * the package was at v2.1+). Reading from the actual package.json the
+ * binary was published with eliminates that drift class entirely — the
+ * help text always matches the installed package's version.
+ *
+ * Resolution order: from this module, walk up parent directories
+ * looking for a package.json with the @rckflr/agent-skills-cli name.
+ * Falls back to "0.0.0-unknown" if not found (defensive — should never
+ * happen with the standard build layout).
+ */
+const VERSION: string = (() => {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    // From dist/cli.js, package.json is one level up. From src (when
+    // running unbundled) it's also one level up. Either way, ../package.json.
+    let candidate = join(here, "..", "package.json");
+    const pkg = JSON.parse(readFileSync(candidate, "utf8")) as {
+      name?: string;
+      version?: string;
+    };
+    if (pkg.name === "@rckflr/agent-skills-cli" && typeof pkg.version === "string") {
+      return pkg.version;
+    }
+  } catch {
+    // ignore — fall through to the safe default
+  }
+  return "0.0.0-unknown";
+})();
 
 const HELP = `agent-skills v${VERSION} — reference CLI for the agent-skills specification
 

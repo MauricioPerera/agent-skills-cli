@@ -4,6 +4,46 @@ How to upgrade between major versions of `@rckflr/agent-skills-cli`.
 
 This file follows a strict per-major-version section format. Each section is the source of truth for the breaking-change diff between adjacent majors. Minor-version upgrades within the same major (e.g., v1.3 → v1.4) never require migration — see [STABILITY.md](./STABILITY.md) for the policy.
 
+The minor-version notes below (v2.0 → v2.1, v2.1 → v2.2) are NOT migrations — they're additive feature pointers. v2.x consumers can keep their existing skills working as-is; the new fields are opt-in.
+
+---
+
+## v2.1.0 → v2.2.0 *(additive minor — spec v1.2)*
+
+No breaking changes. New optional capability:
+
+- **`filesystem` allowlist** (SPEC §2.11). Skills can now declare `filesystem: ["/etc", "/var/log", …]` to gain read-only access to those host directories in addition to `$AGENT_SCRATCH`. Skills using this field MUST also bump `schema_version: "0.2"`.
+
+  Old skills (`schema_version: "0.1"`, no `filesystem`) keep working with scratch-only behaviour — same as before. New skills opt-in by declaring both fields.
+
+- **New public exports** (per [STABILITY.md](./STABILITY.md)): `buildSandboxFs`, `buildNetworkConfig`. The first lets external integrators build the sandbox FS directly (e.g., for tests); the second exposes the wildcard-translation logic so non-CLI banks can reuse it.
+
+- **Runtime behaviour change** (not breaking, but worth noting): `network: ["https://*"]` and similar wildcards are now translated to `dangerouslyAllowFullInternetAccess: true` + all-methods at the just-bash boundary. Pre-v2.2 those wildcards parsed but matched nothing — silent fail at exec time. v2.2 honours the obvious intent.
+
+Reference pack: agent-skills-pack v2.2.0 ships `read-file` v2.0.0 and `ripgrep-search` v2.0.0 with `filesystem: ["/etc", "/var", "/home", "/tmp", "/usr"]`.
+
+---
+
+## v2.0.0 → v2.1.0 *(additive minor — spec v1.1)*
+
+No breaking changes. New optional capability:
+
+- **Pack-distributed CustomCommands** (SPEC §3.4). Skills can ship a `command.js` ESM module alongside `SKILL.md`:
+
+  ```js
+  // skills/my-skill/command.js
+  export default ({ defineCommand }) =>
+    defineCommand("my-cmd", async (args, ctx) => {
+      // ... return { stdout, stderr, exitCode }
+    });
+  ```
+
+  The bank fetches `command.js` at sync time, stores its source as `command_source` on the indexed skill, and registers the produced Command on the sandbox before exec. This closes the gap that prevented v2 sandboxes from running skills wrapping host CLIs (`gh`, `aws`, …) — the wrapper now travels with the pack.
+
+- **New public exports**: `loadCustomCommandFromSource`, `LoadFailureReason` type, `PackCommandApi` interface. The loader returns null on any shape error and reports a structured reason to an optional `onError` callback so pack authors get diagnosable feedback.
+
+- **Bank schema additive**: `IndexedSkill.command_source?: string` is the new field. `extractFrontmatter` in `runExec` strips it before re-validation; pre-v2.1 callers who relied on the `additionalProperties: false` schema would have rejected it (regression test added in v2.1.0+).
+
 ---
 
 ## v1.x → v2.0.0

@@ -56,7 +56,7 @@ Currently internal:
 
 ## Per-export reference
 
-The full categorization lives inline in [`src/index.ts`](./src/index.ts) — exports are grouped by tier with section headers. The list below is a snapshot at v0.19.0.
+The full categorization lives inline in [`src/index.ts`](./src/index.ts) — exports are grouped by tier with section headers. The list below is a snapshot at v2.2.0.
 
 ### Stable (semver-protected)
 
@@ -81,6 +81,12 @@ The full categorization lives inline in [`src/index.ts`](./src/index.ts) — exp
 |---|---|
 | Rekor primitives | `parseRekorEntry`, `fetchRekorEntry`, `findRekorEntryByHash`, `REKOR_PUBLIC_HOST`, `RekorEntry`, `RekorInclusionProof`, `RekorHashedrekordBody` |
 | gitsign Rekor | `computeGitsignRekorLookupHash` |
+| Sandbox runtime (v2.0+) | `createBashRuntime`, `createBankBash`, `createSandboxedExec`, `cleanupScratch`, `runBashCommand`, `BashRuntimeOptions`, `BankBashOptions`, `SandboxedExecOptions` |
+| Sandbox FS (v2.2+) | `buildSandboxFs` (mounts the per-skill scratch dir + read-only host paths from the `filesystem` allowlist via just-bash's MountableFs + OverlayFs) |
+| Network helper (v2.2+) | `buildNetworkConfig` (translates SKILL.md `network` allowlist — including wildcards like `https://*` — to a just-bash NetworkConfig) |
+| db helpers (v2.0+) | `dbInsert`, `dbFind`, `dbUpdate`, `dbRemove`, `dbCount` (typed wrappers over just-bash-data's `db <coll> <op>` interface; `dbUpdate({ upsert: true })` does count→insert/update internally — v2.2+) |
+| vec helpers (v2.0+) | `vecCreate`, `vecStore`, `vecSearch`, `vecRemove` (typed wrappers over just-bash-data's `vec <op> <coll>` interface; auto-create on first store) |
+| Pack CustomCommand loader (v2.1+) | `loadCustomCommandFromSource`, `LoadFailureReason`, `LoadCommandOptions`, `PackCommandApi` |
 
 ### Internal (no shape guarantees at any release)
 
