@@ -1,13 +1,32 @@
 // Public library API for agent-skills-cli.
+//
 // CLI users invoke via the `agent-skills` binary (see src/cli.ts).
 // Library consumers import these named exports.
+//
+// EXPORTS ARE GROUPED BY STABILITY TIER. The tier of each section is
+// declared in its block comment. See STABILITY.md for the breaking-change
+// policy that governs each tier.
+//
+// Summary:
+//   - STABLE       — semver-protected; will not change shape until v2.0.
+//                    Most of the API is here.
+//   - EXPERIMENTAL — shipped, tested, useful for inspection, but the
+//                    surrounding feature is incomplete (e.g., Rekor
+//                    parsing without verification). Shape may change as
+//                    the feature lands.
+//   - INTERNAL     — exposed because tooling that wraps the CLI needs
+//                    them, but treated as internal-coupling. Shape may
+//                    change in any minor release.
 
+// ════════════════════════════════════════════════════════════════════
+// STABLE — schema, validation, identity, errors, runtime primitives
+// ════════════════════════════════════════════════════════════════════
+
+// Skill identity per SPEC §1.
 export { parseIdentity, formatIdentity, isImmutableIdentity } from "./lib/identity.js";
 export type { ParsedIdentity, IdentityRefKind } from "./lib/identity.js";
 
-export { deriveUrls, deriveSkillsIndexUrls, renderTemplate } from "./lib/url.js";
-export type { UrlTemplateContext } from "./lib/url.js";
-
+// Skill source parsing (frontmatter + markdown body).
 export { parseSkillSource, splitFrontmatter } from "./lib/parse-skill.js";
 export type {
   ParsedSkill,
@@ -20,6 +39,7 @@ export type {
   ChainStep,
 } from "./types.js";
 
+// Schema + spec-constraints validation.
 export {
   validateFrontmatter,
   validateSpecConstraints,
@@ -27,14 +47,17 @@ export {
 } from "./lib/validate.js";
 export type { ValidationError, ValidationResult } from "./lib/validate.js";
 
+// Argument substitution + command resolution per SPEC §2.6.
 export { substituteValue, resolveCommand } from "./lib/substitute.js";
 export type { ResolveResult } from "./lib/substitute.js";
 
+// Error model.
 export { CliError, EXIT, isCliError } from "./lib/errors.js";
 export type { ExitCode } from "./lib/errors.js";
 
-// Embedding providers (Cloudflare + Ollama + OpenAI + stub) + factory + composition.
-// v0.6.0 added Ollama and OpenAI-compatible providers + resolveEmbedderFromEnv().
+// Embedding providers + factory + composition (SPEC §4.7).
+// Adding a NEW provider is non-breaking; the existing factories' shape
+// is stable.
 export {
   createCloudflareEmbedder,
   createOllamaEmbedder,
@@ -52,7 +75,7 @@ export type {
   ResolveEmbedderOptions,
 } from "./lib/embed.js";
 
-// Rerank + applicable filter (v0.4.0+)
+// Rerank + applicable filter (SPEC §4.3 / §4.4).
 export {
   aggregateUsage,
   rerank,
@@ -75,10 +98,7 @@ export {
 } from "./lib/applicable.js";
 export type { HostContext, ApplicabilityResult } from "./lib/applicable.js";
 
-// Intent embedding cache (v0.5.0+, used internally by intent-conditional rerank)
-export { IntentEmbeddingCache } from "./lib/intent-cache.js";
-
-// File-based skill bank
+// File-based skill bank.
 export { FileBank, defaultBankRoot } from "./lib/bank.js";
 export type {
   Subscription,
@@ -90,7 +110,7 @@ export type {
   AuditEntry,
 } from "./lib/bank.js";
 
-// Command entry points (also exposed for programmatic use)
+// Command entry points (also exposed for programmatic use).
 export { runValidate, printValidateResult } from "./commands/validate.js";
 export type { ValidateOptions, ValidateResult } from "./commands/validate.js";
 
@@ -134,7 +154,15 @@ export type {
 export { runInit, printInitResult } from "./commands/init.js";
 export type { InitOptions, InitResult } from "./commands/init.js";
 
-// Signature verification (v0.10.0+, used internally by sync)
+export { runUpdate, printUpdateResult } from "./commands/update.js";
+export type {
+  UpdateOptions,
+  UpdateResult,
+  UpdateSubscriptionResult,
+} from "./commands/update.js";
+
+// Signature verification — Level 3a complete (SPEC §5.1 / §5.2).
+// Sigstore identity extraction is shipped and used (SPEC §5.1 v0.3.3).
 export {
   verifyGitHubTag,
   enforceVerification,
@@ -145,12 +173,25 @@ export type {
   SignatureMethod,
   SignatureVerification,
 } from "./lib/signature.js";
-
-// CMS / Sigstore identity extraction (v0.16.0+) + gitsign Rekor lookup hash (v0.17.1+)
-export { extractSigstoreIdentity, computeGitsignRekorLookupHash } from "./lib/cms.js";
+export { extractSigstoreIdentity } from "./lib/cms.js";
 export type { SigstoreIdentity } from "./lib/cms.js";
 
-// Rekor entry parsing + lookup (v0.17.0+ — parsing only; verification queued)
+// ════════════════════════════════════════════════════════════════════
+// EXPERIMENTAL — shipped foundations whose surrounding feature is
+// incomplete. The shape may change when the feature lands.
+// ════════════════════════════════════════════════════════════════════
+//
+// Rekor primitives + gitsign Rekor lookup hash. Parsing + lookup are
+// done; client-side Level 4 verification (Merkle inclusion proof,
+// checkpoint signature, Fulcio chain validation) is queued. When that
+// work lands, these primitives may be re-shaped to fit a higher-level
+// `verifyRekorEntry` surface — at which point a migration shim will
+// be provided. Until then, depending on these is fine for inspection
+// (e.g., audit tooling) but not as part of a long-term verification
+// workflow. See STABILITY.md.
+
+export { computeGitsignRekorLookupHash } from "./lib/cms.js";
+
 export {
   parseRekorEntry,
   fetchRekorEntry,
@@ -163,15 +204,25 @@ export type {
   RekorHashedrekordBody,
 } from "./lib/rekor.js";
 
-// Update command (v0.11.0+)
-export { runUpdate, printUpdateResult } from "./commands/update.js";
-export type {
-  UpdateOptions,
-  UpdateResult,
-  UpdateSubscriptionResult,
-} from "./commands/update.js";
+// ════════════════════════════════════════════════════════════════════
+// INTERNAL — exposed because tooling that wraps the CLI uses them,
+// but treated as internal coupling. Shape may change in any minor
+// release. Prefer the higher-level command entry points (runValidate
+// etc.) for stable integrations.
+// ════════════════════════════════════════════════════════════════════
 
-// CLI argument helpers (v0.12.0+, used by the bin shim — exposed for
-// downstream tooling that wraps the CLI with the same flag conventions)
+// CLI argument parsing helpers (used by the bin shim, exposed for
+// downstream wrappers that want the same flag conventions).
 export { parseArgv, parseRerankMode, parseTenantFlag } from "./lib/cli-args.js";
 export type { Argv } from "./lib/cli-args.js";
+
+// URL derivation — used by sync to map (repo, sha, path) → CDN URLs.
+// Internal because the URL template strategy may evolve as more hosts
+// are supported (currently github.com via jsDelivr).
+export { deriveUrls, deriveSkillsIndexUrls, renderTemplate } from "./lib/url.js";
+export type { UrlTemplateContext } from "./lib/url.js";
+
+// Intent embedding cache used by intent-conditional rerank. The cache
+// is a perf optimization; the rerank API is stable but the cache shape
+// is implementation detail.
+export { IntentEmbeddingCache } from "./lib/intent-cache.js";
