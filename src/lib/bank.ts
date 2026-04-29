@@ -291,6 +291,65 @@ export class FileBank {
     this.skillsCache = null;
   }
 
+  /**
+   * Verify a just-bash-data collection's underlying file is well-formed.
+   *
+   * Background — silent corruption regression:
+   * The legacy `subscriptions.json` storage (≤v0.19) raised a clear
+   * "not valid JSON" CliError when the file got corrupted. The v2.0
+   * migration to `db skill_subscriptions` (and `db skills`, `db
+   * skill_audit`) inherited just-bash-data's behaviour of treating
+   * a malformed `<coll>.docs.json` as an EMPTY collection — listing
+   * silently returns []. Operationally this is dangerous: a partial
+   * write during crash, a disk error, or a manual edit gone wrong
+   * would silently drop every record without any signal to the user.
+   *
+   * This helper restores the legacy "corruption is loud" contract by
+   * eagerly reading and validating the docs file at the host level.
+   * Called from list-shaped read paths (listSubscriptions, listSkills,
+   * listAudit) before delegating to the just-bash-data find. If the
+   * file is absent, the bank is fresh — fine. If the file is present
+   * but doesn't parse to a JSON array, throw a clear CliError.
+   *
+   * Layout coupling (acknowledged): this depends on just-bash-data's
+   * docs file path convention `<bankDir>/data/<collection>.docs.json`.
+   * If the upstream layout changes in a future major version of
+   * just-bash-data, this check needs to be updated. The pin is in
+   * package.json; behaviour is asserted by the integrity tests.
+   */
+  private async assertCollectionIntegrity(collection: string): Promise<void> {
+    const docsPath = join(this.rootDir, "data", `${collection}.docs.json`);
+    let text: string;
+    try {
+      text = await readFile(docsPath, "utf8");
+    } catch (err) {
+      if (isMissing(err)) return; // fresh bank, no docs yet — fine
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new CliError(
+        EXIT.RUNTIME,
+        `bank collection ${collection} docs at ${docsPath} is unreadable: ${msg}.`,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new CliError(
+        EXIT.RUNTIME,
+        `bank collection ${collection} docs at ${docsPath} is not valid JSON: ${msg}. ` +
+          `Run 'agent-skills reset' to start over (this drops every record).`,
+      );
+    }
+    if (!Array.isArray(parsed)) {
+      throw new CliError(
+        EXIT.RUNTIME,
+        `bank collection ${collection} docs at ${docsPath} is not a JSON array (got ${typeof parsed}). ` +
+          `The file may have been replaced or hand-edited; run 'agent-skills reset' to start over.`,
+      );
+    }
+  }
+
   /** Ensure all expected directories exist. Idempotent. */
   async ensureDir(): Promise<void> {
     await mkdir(this.skillsDir, { recursive: true });
@@ -368,6 +427,7 @@ export class FileBank {
   // (just-bash-data convention) — translated at the boundary here.
 
   async listSubscriptions(): Promise<Subscription[]> {
+    await this.assertCollectionIntegrity("skill_subscriptions");
     const docs = await dbFind<Subscription & { _id: string }>(
       this.getBash(),
       "skill_subscriptions",
@@ -445,6 +505,9 @@ export class FileBank {
 
   async listSkills(): Promise<IndexedSkill[]> {
     if (this.skillsCache !== null) return this.skillsCache;
+    // Integrity check is on the cache-miss path only — fresh bank or
+    // post-mutation. Cache hits are O(1) and skip the disk touch.
+    await this.assertCollectionIntegrity("skills");
     const docs = await dbFind<Record<string, unknown>>(
       this.getBash(),
       "skills",
@@ -567,6 +630,8 @@ export class FileBank {
   async listAudit(opts: { limit?: number; skill_id?: string } = {}): Promise<AuditEntry[]> {
     let all = this.auditCacheAll;
     if (all === null) {
+      // Same cache-miss-only integrity check policy as listSkills.
+      await this.assertCollectionIntegrity("skill_audit");
       const filter = opts.skill_id !== undefined ? { skill_id: opts.skill_id } : {};
       const docs = await dbFind<Record<string, unknown>>(
         this.getBash(),

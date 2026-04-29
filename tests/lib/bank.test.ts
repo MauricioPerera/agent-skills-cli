@@ -386,17 +386,70 @@ describe("FileBank corruption discrimination (v0.6.1+)", () => {
     expect(await bank.getMeta()).toBeNull();
   });
 
-  it.skip("listSubscriptions throws CliError on malformed subscriptions.json (legacy storage)", async () => {
-    // Subscriptions migrated to just-bash-data db backing in v0.20.0+.
-    // The old `subscriptions.json` file is no longer read; corruption
-    // discrimination has different semantics under the new storage
-    // (the data plugin handles its own integrity checks). Skipping
-    // this test pending an equivalent assertion against db corruption.
-    const bank = new FileBank({ rootDir: tmpDir });
-    await bank.ensureDir();
-    const fs = await import("node:fs/promises");
-    await fs.writeFile(join(tmpDir, "subscriptions.json"), "{not json", "utf8");
-    await expect(bank.listSubscriptions()).rejects.toThrow(/subscriptions\.json.*not valid JSON/i);
+  // Integrity contract for the just-bash-data-backed collections.
+  //
+  // History: legacy `subscriptions.json` storage threw a clear "not valid
+  // JSON" CliError on corruption. After v2.0's migration to the data
+  // plugin, just-bash-data silently treats a malformed `<coll>.docs.json`
+  // as an empty collection — listSubscriptions returns [] without warning
+  // even when the file on disk is `{not json`. That's a regression that
+  // could mask data loss after a crash / disk error / hand-edit gone
+  // wrong. The bank now eagerly validates the docs file before delegating
+  // to dbFind. These tests pin the restored contract for all three
+  // reads: listSubscriptions, listSkills, listAudit.
+  describe("integrity check on docs corruption (regression — legacy contract restored)", () => {
+    const writeCorrupt = async (collection: string, content: string): Promise<void> => {
+      const fs = await import("node:fs/promises");
+      await fs.mkdir(join(tmpDir, "data"), { recursive: true });
+      await fs.writeFile(
+        join(tmpDir, "data", `${collection}.docs.json`),
+        content,
+        "utf8",
+      );
+    };
+
+    it("listSubscriptions throws CliError when skill_subscriptions.docs.json is malformed", async () => {
+      const bank = new FileBank({ rootDir: tmpDir });
+      await writeCorrupt("skill_subscriptions", "{not json");
+      await expect(bank.listSubscriptions()).rejects.toThrow(
+        /skill_subscriptions.*not valid JSON/i,
+      );
+    });
+
+    it("listSkills throws CliError when skills.docs.json is malformed", async () => {
+      const bank = new FileBank({ rootDir: tmpDir });
+      await writeCorrupt("skills", "{also not json");
+      await expect(bank.listSkills()).rejects.toThrow(/skills.*not valid JSON/i);
+    });
+
+    it("listAudit throws CliError when skill_audit.docs.json is malformed", async () => {
+      const bank = new FileBank({ rootDir: tmpDir });
+      await writeCorrupt("skill_audit", "definitely[not}json");
+      await expect(bank.listAudit()).rejects.toThrow(/skill_audit.*not valid JSON/i);
+    });
+
+    it("listSubscriptions throws when the docs file is valid JSON but not an array", async () => {
+      const bank = new FileBank({ rootDir: tmpDir });
+      await writeCorrupt("skill_subscriptions", '"i am a string, not an array"');
+      await expect(bank.listSubscriptions()).rejects.toThrow(
+        /skill_subscriptions.*not a JSON array/i,
+      );
+    });
+
+    it("integrity check is silent on a fresh bank (no file → no error)", async () => {
+      const bank = new FileBank({ rootDir: tmpDir });
+      // No bank state on disk yet. All three reads must return empty
+      // without invoking the integrity error path.
+      await expect(bank.listSubscriptions()).resolves.toEqual([]);
+      await expect(bank.listSkills()).resolves.toEqual([]);
+      await expect(bank.listAudit()).resolves.toEqual([]);
+    });
+
+    it("integrity check is silent on a well-formed empty docs array", async () => {
+      const bank = new FileBank({ rootDir: tmpDir });
+      await writeCorrupt("skill_subscriptions", "[]");
+      await expect(bank.listSubscriptions()).resolves.toEqual([]);
+    });
   });
 
   it("listAudit returns [] when audit log doesn't exist yet", async () => {
