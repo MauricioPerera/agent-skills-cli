@@ -10,12 +10,12 @@
 // env. `command_template` references like $STRIPE_KEY are expanded by the
 // SHELL at exec time, not by the bank. The CLI never sees the credential.
 
-import { spawn } from "node:child_process";
 import type { AuditEntry, FileBank, IndexedSkill } from "../lib/bank.js";
 import type { SkillFrontmatter } from "../types.js";
 import { CliError, EXIT } from "../lib/errors.js";
 import { resolveCommand } from "../lib/substitute.js";
 import { validateSkill } from "../lib/validate.js";
+import { createBashRuntime, runBashCommand } from "../lib/runtime.js";
 
 /**
  * Strip bank-managed fields from an IndexedSkill, leaving only the original
@@ -75,87 +75,34 @@ export interface ExecResult {
 }
 
 /**
- * Spawn `bash -c <command>` and capture I/O + exit code. Enforces a hard
- * timeout via a 3-stage kill ladder:
- *   1. SIGTERM at timeoutSec.
- *   2. SIGKILL at timeoutSec + 2s grace.
- *   3. Forced promise resolution at timeoutSec + 4s, regardless of whether
- *      `proc.on('close')` fires. This guards against platforms (notably
- *      Windows msys / Git Bash) where signals don't always propagate through
- *      to grandchildren of bash and the proc would otherwise hang.
+ * Run the substituted `command_template` via the just-bash runtime
+ * (per SPEC §4.4 + IMPLEMENTATION.md "exec-skill.sh"). The host shell
+ * is NOT invoked — execution happens inside just-bash's AST interpreter
+ * with the just-bash-data `db`/`vec` commands available.
+ *
+ * Per SPEC §4.4 sandbox model, env access is scoped to the skill's
+ * declared `required_env ∪ optional_env`. This preserves the P1 invariant
+ * (SPEC §8 + SECURITY.md §P1) — the host's `$STRIPE_KEY` etc. are
+ * substituted by the shell at exec time only when the skill declared
+ * them, and never reach the LLM context.
  */
 const runBash = async (
   command: string,
   timeoutSec: number,
+  envWhitelist: string[],
 ): Promise<{ exit_code: number; stdout: string; stderr: string; elapsed_ms: number; timed_out: boolean }> => {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let resolved = false;
-    let killTimer: NodeJS.Timeout | undefined;
-    let forceTimer: NodeJS.Timeout | undefined;
-
-    const settle = (result: { exit_code: number; stdout: string; stderr: string; elapsed_ms: number; timed_out: boolean }): void => {
-      if (resolved) return;
-      resolved = true;
-      if (killTimer) clearTimeout(killTimer);
-      if (forceTimer) clearTimeout(forceTimer);
-      resolve(result);
-    };
-
-    const proc = spawn("bash", ["-c", command], {
-      stdio: ["ignore", "pipe", "pipe"],
-      // Inherit env so $STRIPE_KEY etc. are visible to the shell at exec time.
-      env: process.env,
-    });
-
-    // Soft timeout → SIGTERM, then 2s grace → SIGKILL.
-    const softTimer = setTimeout(() => {
-      timedOut = true;
-      try { proc.kill("SIGTERM"); } catch { /* already gone */ }
-      killTimer = setTimeout(() => {
-        try { proc.kill("SIGKILL"); } catch { /* already gone */ }
-      }, 2000);
-      // Hard timeout: forcibly resolve even if `close` never fires
-      // (Windows msys bash may not propagate signals to grandchildren).
-      forceTimer = setTimeout(() => {
-        settle({
-          exit_code: 124, // canonical 'timeout' exit code
-          stdout,
-          stderr,
-          elapsed_ms: Date.now() - start,
-          timed_out: true,
-        });
-      }, 4000);
-    }, timeoutSec * 1000);
-
-    proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
-    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
-
-    proc.on("close", (code, signal) => {
-      clearTimeout(softTimer);
-      settle({
-        exit_code: code !== null ? code : (signal !== null ? 128 + 15 : 1),
-        stdout,
-        stderr,
-        elapsed_ms: Date.now() - start,
-        timed_out: timedOut,
-      });
-    });
-
-    proc.on("error", (err) => {
-      clearTimeout(softTimer);
-      settle({
-        exit_code: 1,
-        stdout: "",
-        stderr: `spawn error: ${err.message}\n`,
-        elapsed_ms: Date.now() - start,
-        timed_out: false,
-      });
-    });
-  });
+  // One Bash instance per exec call. Stateless across invocations (which
+  // matches the previous spawn-per-exec semantics). Storage migration to
+  // a long-lived bank-scoped Bash instance is a follow-up commit.
+  const bash = createBashRuntime();
+  // Forward only the env vars the skill declared; just-bash provides its
+  // own PATH/HOME defaults, which we don't override.
+  const env: Record<string, string> = {};
+  for (const name of envWhitelist) {
+    const value = process.env[name];
+    if (typeof value === "string") env[name] = value;
+  }
+  return runBashCommand(bash, command, timeoutSec, { env });
 };
 
 /**
@@ -214,9 +161,14 @@ export const runExec = async (opts: ExecOptions): Promise<ExecResult> => {
     };
   }
 
-  // 5. Execute via bash with a timeout
+  // 5. Execute via just-bash with a timeout, scoping env access to the
+  //    skill's declared required_env ∪ optional_env per SPEC §4.4.
   const timeoutSec = opts.timeoutSec ?? 60;
-  const result = await runBash(resolved.command, timeoutSec);
+  const envWhitelist = [
+    ...(frontmatter.required_env ?? []),
+    ...(frontmatter.optional_env ?? []),
+  ];
+  const result = await runBash(resolved.command, timeoutSec, envWhitelist);
 
   // 6. Audit (unless --no-audit)
   if (opts.noAudit !== true) {
