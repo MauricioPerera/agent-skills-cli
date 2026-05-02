@@ -62,6 +62,7 @@ export {
   createCloudflareEmbedder,
   createOllamaEmbedder,
   createOpenAIEmbedder,
+  createTransformersJSEmbedder,
   createStubEmbedder,
   resolveEmbedderFromEnv,
   composeEmbeddingText,
@@ -72,6 +73,7 @@ export type {
   CloudflareEmbedderConfig,
   OllamaEmbedderConfig,
   OpenAIEmbedderConfig,
+  TransformersJSEmbedderConfig,
   ResolveEmbedderOptions,
 } from "./lib/embed.js";
 

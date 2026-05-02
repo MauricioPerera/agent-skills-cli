@@ -384,16 +384,208 @@ export const createOpenAIEmbedder = (
 };
 
 // ────────────────────────────────────────────────────────────────────
+// Transformers.js provider (v2.3.0+) — fully local, no server, no creds.
+//
+// Runs the embedding model in-process via @huggingface/transformers
+// (ONNX Runtime). Works in Node ≥22, Bun, Deno, Cloudflare Workers, and
+// the browser. The first embed() call lazy-loads the model (downloads
+// from Hugging Face Hub on first use, then served from disk cache).
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Known transformers.js-compatible embedding models with their dimensions.
+ * Operators can use any other ONNX feature-extraction model on the Hub by
+ * passing `dim` explicitly via TRANSFORMERS_DIM.
+ *
+ * `onnx-community/embeddinggemma-300m-ONNX` is provided for parity with
+ * the Cloudflare `@cf/google/embeddinggemma-300m` provider — same weights,
+ * same vector space, no network egress.
+ */
+const TRANSFORMERS_MODEL_DIMS: Record<string, number> = {
+  // Sentence-transformers (English)
+  "Xenova/all-MiniLM-L6-v2": 384,
+  "Xenova/all-MiniLM-L12-v2": 384,
+  "Xenova/all-mpnet-base-v2": 768,
+  "Xenova/all-distilroberta-v1": 768,
+  // BGE family (BAAI)
+  "Xenova/bge-small-en-v1.5": 384,
+  "Xenova/bge-base-en-v1.5": 768,
+  "Xenova/bge-large-en-v1.5": 1024,
+  "Xenova/bge-m3": 1024,
+  // Multilingual
+  "Xenova/paraphrase-multilingual-MiniLM-L12-v2": 384,
+  "Xenova/multilingual-e5-small": 384,
+  "Xenova/multilingual-e5-base": 768,
+  "Xenova/multilingual-e5-large": 1024,
+  // GTE
+  "Xenova/gte-small": 384,
+  "Xenova/gte-base": 768,
+  "Xenova/gte-large": 1024,
+  // Jina
+  "Xenova/jina-embeddings-v2-small-en": 512,
+  "Xenova/jina-embeddings-v2-base-en": 768,
+  // EmbeddingGemma — parity with Cloudflare @cf/google/embeddinggemma-300m
+  "onnx-community/embeddinggemma-300m-ONNX": 768,
+};
+
+/** Subset of @huggingface/transformers types we use, declared inline so this
+ *  module compiles without the dep installed. */
+type TransformersPipeline = (
+  text: string,
+  options?: { pooling?: "mean" | "cls" | "none"; normalize?: boolean },
+) => Promise<{ data: ArrayLike<number> }>;
+
+type TransformersModule = {
+  pipeline: (
+    task: string,
+    model: string,
+    options?: Record<string, unknown>,
+  ) => Promise<TransformersPipeline>;
+  env?: { cacheDir?: string; allowLocalModels?: boolean; allowRemoteModels?: boolean };
+};
+
+export interface TransformersJSEmbedderConfig {
+  /** Model identifier on Hugging Face Hub. Default: Xenova/all-MiniLM-L6-v2 (384-dim, ~25 MB). */
+  model?: string;
+  /** Output dimensionality. Required for models not in TRANSFORMERS_MODEL_DIMS. */
+  dim?: number;
+  /** Cache directory for downloaded models. Default: process default ($HOME/.cache/huggingface). */
+  cacheDir?: string;
+  /** Quantization. Default: "fp32". Other values: "fp16" | "q8" | "q4" (smaller/faster, slight quality loss). */
+  dtype?: "fp32" | "fp16" | "q8" | "q4";
+  /** Pooling strategy applied by the pipeline. Default: "mean". */
+  pooling?: "mean" | "cls";
+  /** L2-normalize the resulting vector. Default: true. */
+  normalize?: boolean;
+  /**
+   * Test-only injection point. When provided, used in place of dynamically
+   * importing "@huggingface/transformers". Lets tests avoid pulling the
+   * real library and downloading weights.
+   */
+  loadModule?: () => Promise<TransformersModule>;
+}
+
+/**
+ * Create an embedding provider that runs the model entirely in-process via
+ * @huggingface/transformers (ONNX Runtime).
+ *
+ * The pipeline is lazy-loaded on the first `embed()` call and reused for
+ * subsequent calls. Concurrent first calls share the same load promise.
+ *
+ * @huggingface/transformers is a runtime peer dependency — install it
+ * separately:
+ *
+ *   npm install @huggingface/transformers
+ *
+ * Setup (Node):
+ *   npm install @huggingface/transformers
+ *   EMBEDDING_PROVIDER=transformers-js \
+ *   TRANSFORMERS_MODEL=Xenova/all-MiniLM-L6-v2 \
+ *   agent-skills sync github.com/...
+ */
+export const createTransformersJSEmbedder = (
+  config: TransformersJSEmbedderConfig = {},
+): EmbeddingProvider => {
+  const model = config.model ?? "Xenova/all-MiniLM-L6-v2";
+  const dim = config.dim ?? TRANSFORMERS_MODEL_DIMS[model];
+  if (dim === undefined) {
+    throw new CliError(
+      EXIT.USAGE,
+      `unknown transformers.js embedding model '${model}'. ` +
+        `Known: ${Object.keys(TRANSFORMERS_MODEL_DIMS).join(", ")}. ` +
+        `For other models, set TRANSFORMERS_DIM=<n> explicitly.`,
+    );
+  }
+
+  const dtype = config.dtype ?? "fp32";
+  const pooling = config.pooling ?? "mean";
+  const normalize = config.normalize ?? true;
+
+  let pipelinePromise: Promise<TransformersPipeline> | null = null;
+
+  const getPipeline = async (): Promise<TransformersPipeline> => {
+    if (pipelinePromise) return pipelinePromise;
+    pipelinePromise = (async () => {
+      let mod: TransformersModule;
+      try {
+        if (config.loadModule) {
+          mod = await config.loadModule();
+        } else {
+          // Dynamic import via a string variable so TypeScript's module
+          // resolver doesn't require the package to be present at compile time.
+          // It's an optional peer dependency: only required at runtime when
+          // the user explicitly selects this provider.
+          const pkg = "@huggingface/transformers";
+          mod = (await import(/* @vite-ignore */ pkg)) as unknown as TransformersModule;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new CliError(
+          EXIT.USAGE,
+          `transformers.js provider requires @huggingface/transformers. ` +
+            `Install with: npm install @huggingface/transformers. ` +
+            `Original error: ${msg}`,
+        );
+      }
+      if (config.cacheDir && mod.env) {
+        mod.env.cacheDir = config.cacheDir;
+      }
+      try {
+        return await mod.pipeline("feature-extraction", model, { dtype });
+      } catch (err) {
+        // Reset so a transient failure doesn't permanently break the provider.
+        pipelinePromise = null;
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new CliError(
+          EXIT.RUNTIME,
+          `transformers.js failed to load model '${model}': ${msg}`,
+        );
+      }
+    })();
+    return pipelinePromise;
+  };
+
+  return {
+    name: `transformers-js:${model}`,
+    dim,
+    async embed(text: string): Promise<number[]> {
+      if (text.length === 0) {
+        throw new CliError(EXIT.USAGE, "cannot embed empty text");
+      }
+      const extractor = await getPipeline();
+      let output: { data: ArrayLike<number> };
+      try {
+        output = await extractor(text, { pooling, normalize });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new CliError(EXIT.RUNTIME, `transformers.js inference failed: ${msg}`);
+      }
+      const vec = Array.from(output.data as ArrayLike<number>) as number[];
+      if (vec.length !== dim) {
+        throw new CliError(
+          EXIT.RUNTIME,
+          `transformers.js returned ${vec.length}-dim vector; expected ${dim} for model ${model}. ` +
+            `Override with TRANSFORMERS_DIM=${vec.length} if this model's dim is unknown to the CLI.`,
+        );
+      }
+      return vec;
+    },
+  };
+};
+
+// ────────────────────────────────────────────────────────────────────
 // Provider factory: pick a provider from env vars.
 // ────────────────────────────────────────────────────────────────────
 
 export interface ResolveEmbedderOptions {
   /** Override-everything: explicit provider name. Otherwise read from env EMBEDDING_PROVIDER. */
-  provider?: "cloudflare" | "ollama" | "openai";
+  provider?: "cloudflare" | "ollama" | "openai" | "transformers-js";
   /** Optional custom fetch (for testing). */
   fetchFn?: typeof fetch;
   /** Snapshot of env vars (defaults to process.env). */
   env?: Record<string, string | undefined>;
+  /** Test-only loader for the @huggingface/transformers module. */
+  loadTransformersModule?: () => Promise<TransformersModule>;
 }
 
 /**
@@ -406,13 +598,15 @@ export interface ResolveEmbedderOptions {
  *        a. Cloudflare — if both CF_ACCOUNT_ID and CF_API_TOKEN are set.
  *        b. OpenAI — if OPENAI_API_KEY is set.
  *        c. Ollama — if OLLAMA_BASE_URL or OLLAMA_MODEL is set as a hint.
- *   4. Else throw a USAGE error listing all 3 options.
+ *        d. transformers.js — if TRANSFORMERS_MODEL is set as a hint.
+ *   4. Else throw a USAGE error listing all 4 options.
  *
  * Rationale for the auto-detect order: existing Cloudflare users (the v0.2-v0.5
  * audience) keep working with no env changes; explicit OpenAI keys signal a
- * clear opt-in; Ollama is reserved for the explicit case (no other creds present
- * AND a positive OLLAMA_* hint) because it would otherwise shadow misconfigured
- * environments where the user forgot to set their real provider's vars.
+ * clear opt-in; Ollama and transformers.js are reserved for the explicit case
+ * (no other creds present AND a positive *_MODEL hint) because they would
+ * otherwise shadow misconfigured environments where the user forgot to set
+ * their real provider's vars.
  *
  * To override the auto-detect priority, set EMBEDDING_PROVIDER explicitly.
  */
@@ -474,13 +668,62 @@ export const resolveEmbedderFromEnv = (
     });
   };
 
+  const tryTransformersJS = (): EmbeddingProvider => {
+    const dimEnv = env.TRANSFORMERS_DIM ? Number.parseInt(env.TRANSFORMERS_DIM, 10) : undefined;
+    if (dimEnv !== undefined && (!Number.isFinite(dimEnv) || dimEnv <= 0)) {
+      throw new CliError(
+        EXIT.USAGE,
+        `TRANSFORMERS_DIM must be a positive integer, got '${env.TRANSFORMERS_DIM}'`,
+      );
+    }
+    const dtypeEnv = env.TRANSFORMERS_DTYPE;
+    if (
+      dtypeEnv !== undefined &&
+      !["fp32", "fp16", "q8", "q4"].includes(dtypeEnv)
+    ) {
+      throw new CliError(
+        EXIT.USAGE,
+        `TRANSFORMERS_DTYPE must be one of fp32 | fp16 | q8 | q4, got '${dtypeEnv}'`,
+      );
+    }
+    const poolingEnv = env.TRANSFORMERS_POOLING;
+    if (poolingEnv !== undefined && !["mean", "cls"].includes(poolingEnv)) {
+      throw new CliError(
+        EXIT.USAGE,
+        `TRANSFORMERS_POOLING must be one of mean | cls, got '${poolingEnv}'`,
+      );
+    }
+    const normalizeEnv = env.TRANSFORMERS_NORMALIZE;
+    let normalize: boolean | undefined;
+    if (normalizeEnv !== undefined) {
+      if (normalizeEnv === "true" || normalizeEnv === "1") normalize = true;
+      else if (normalizeEnv === "false" || normalizeEnv === "0") normalize = false;
+      else {
+        throw new CliError(
+          EXIT.USAGE,
+          `TRANSFORMERS_NORMALIZE must be true|false|1|0, got '${normalizeEnv}'`,
+        );
+      }
+    }
+    return createTransformersJSEmbedder({
+      model: env.TRANSFORMERS_MODEL,
+      dim: dimEnv,
+      cacheDir: env.TRANSFORMERS_CACHE_DIR,
+      dtype: dtypeEnv as TransformersJSEmbedderConfig["dtype"],
+      pooling: poolingEnv as TransformersJSEmbedderConfig["pooling"],
+      normalize,
+      loadModule: opts.loadTransformersModule,
+    });
+  };
+
   if (explicit === "cloudflare") return tryCloudflare();
   if (explicit === "ollama") return tryOllama();
   if (explicit === "openai") return tryOpenAI();
+  if (explicit === "transformers-js") return tryTransformersJS();
   if (explicit !== undefined) {
     throw new CliError(
       EXIT.USAGE,
-      `unknown EMBEDDING_PROVIDER '${explicit}'. Valid: cloudflare | ollama | openai`,
+      `unknown EMBEDDING_PROVIDER '${explicit}'. Valid: cloudflare | ollama | openai | transformers-js`,
     );
   }
 
@@ -488,8 +731,9 @@ export const resolveEmbedderFromEnv = (
   if (env.CF_ACCOUNT_ID && env.CF_API_TOKEN) return tryCloudflare();
   if (env.OPENAI_API_KEY) return tryOpenAI();
   if (env.OLLAMA_BASE_URL || env.OLLAMA_MODEL) return tryOllama();
+  if (env.TRANSFORMERS_MODEL) return tryTransformersJS();
 
-  // Nothing configured. Helpful error listing all 3 options.
+  // Nothing configured. Helpful error listing all 4 options.
   throw new CliError(
     EXIT.USAGE,
     [
@@ -497,6 +741,7 @@ export const resolveEmbedderFromEnv = (
       "  • EMBEDDING_PROVIDER=cloudflare with CF_ACCOUNT_ID + CF_API_TOKEN",
       "  • EMBEDDING_PROVIDER=ollama (defaults to http://localhost:11434, model nomic-embed-text)",
       "  • EMBEDDING_PROVIDER=openai with OPENAI_API_KEY",
+      "  • EMBEDDING_PROVIDER=transformers-js (in-process via @huggingface/transformers, no creds, no server)",
       "Or set the relevant credentials and the provider auto-detects.",
     ].join("\n"),
   );

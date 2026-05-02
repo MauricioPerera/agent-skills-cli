@@ -170,11 +170,25 @@ Failures (1):
 
 Use `--json` for CI integration; non-zero exit when any query fails (so a regression breaks the build).
 
+**v2.3.0** — `transformers-js` provider (in-process, browser-compatible). Closes the offline-first gap: the CLI's retrieval loop can now run end-to-end without a server (no Ollama daemon), without credentials, and inside a browser/Worker bundle.
+
+```bash
+npm install @huggingface/transformers   # peer dep, optional
+EMBEDDING_PROVIDER=transformers-js \
+TRANSFORMERS_MODEL=Xenova/all-MiniLM-L6-v2 \
+agent-skills sync github.com/...
+```
+
+`onnx-community/embeddinggemma-300m-ONNX` is supported for **vector-space parity** with the Cloudflare `@cf/google/embeddinggemma-300m` provider — same weights, same retrieval results, no network egress.
+
+---
+
 **v0.6.0** — multi-provider embeddings. The CLI works against:
 
 - **Cloudflare Workers AI** (`bge-base-en-v1.5` / `bge-large` / `bge-m3` / `embeddinggemma`).
 - **Ollama** (local, zero credentials, zero network egress — `nomic-embed-text` by default).
 - **OpenAI / OpenAI-compatible** (`text-embedding-3-small/large` + Together / Anyscale / Mistral / vLLM / infinity / TEI any server speaking the same `/v1/embeddings` shape).
+- **transformers.js** (v2.3.0+, in-process, browser-compatible, zero credentials, zero server — `Xenova/all-MiniLM-L6-v2` by default).
 
 Auto-detected from your environment (or set `EMBEDDING_PROVIDER` explicitly). Same loop:
 
@@ -250,7 +264,7 @@ See **[MIGRATION.md](./MIGRATION.md)** for per-major-version migration notes. Mi
 
 ## End-to-end demo
 
-Pick **one** of the three embedding providers below. Everything else is identical.
+Pick **one** of the four embedding providers below. Everything else is identical.
 
 ### Option A — Local with Ollama (zero credentials, zero network)
 
@@ -278,6 +292,25 @@ export OPENAI_API_KEY=sk-...
 # Optional: point at a compatible server (Together / Mistral / vLLM / TEI / infinity / …)
 # export OPENAI_BASE_URL=https://api.together.xyz/v1
 ```
+
+### Option D — transformers.js (in-process, zero credentials, zero server, browser-compatible)
+
+```bash
+# 1. Install the optional peer dep (one-time)
+npm install @huggingface/transformers
+
+# 2. Tell the CLI to use it (defaults to Xenova/all-MiniLM-L6-v2, ~25 MB, 384-dim)
+export EMBEDDING_PROVIDER=transformers-js
+
+# Optional config
+# export TRANSFORMERS_MODEL=onnx-community/embeddinggemma-300m-ONNX  # vector-space parity with @cf/google/embeddinggemma-300m
+# export TRANSFORMERS_DTYPE=q4f16          # fp32|fp16|q8|q4
+# export TRANSFORMERS_POOLING=mean         # mean|cls
+# export TRANSFORMERS_NORMALIZE=true       # L2-normalize
+# export TRANSFORMERS_CACHE_DIR=~/.cache/hf
+```
+
+The model downloads from Hugging Face Hub on first use (~25 MB to ~300 MB depending on choice) and is cached on disk. No daemon, no network egress at runtime, no credentials. Works in Node ≥22, Bun, Deno, Cloudflare Workers, and the browser.
 
 ### Same flow regardless of provider
 
