@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   createOllamaEmbedder,
   createOpenAIEmbedder,
+  createTransformersJSEmbedder,
   resolveEmbedderFromEnv,
 } from "../../src/lib/embed.js";
 
@@ -27,6 +28,15 @@ const okJson = (body: unknown) =>
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
+
+// Fake @huggingface/transformers module loader. Returns a pipeline factory
+// that always yields a vector of the given dim (filled with sequential floats).
+const makeFakeTransformersModule = (dim: number) => async () => ({
+  env: {} as { cacheDir?: string },
+  pipeline: async () => async (_text: string, _opts?: unknown) => ({
+    data: new Float32Array(Array.from({ length: dim }, (_, i) => i / dim)),
+  }),
+});
 
 // ────────────────────────────────────────────────────────────────────
 // Ollama
@@ -212,6 +222,94 @@ describe("createOpenAIEmbedder", () => {
 });
 
 // ────────────────────────────────────────────────────────────────────
+// transformers.js
+// ────────────────────────────────────────────────────────────────────
+
+describe("createTransformersJSEmbedder", () => {
+  it("uses default model + auto-resolves dim from known list", async () => {
+    const e = createTransformersJSEmbedder({
+      loadModule: makeFakeTransformersModule(384),
+    });
+    expect(e.name).toBe("transformers-js:Xenova/all-MiniLM-L6-v2");
+    expect(e.dim).toBe(384);
+
+    const v = await e.embed("hello");
+    expect(v.length).toBe(384);
+  });
+
+  it("respects custom model + dim", async () => {
+    const e = createTransformersJSEmbedder({
+      model: "Xenova/bge-large-en-v1.5",
+      loadModule: makeFakeTransformersModule(1024),
+    });
+    expect(e.name).toBe("transformers-js:Xenova/bge-large-en-v1.5");
+    expect(e.dim).toBe(1024);
+
+    const v = await e.embed("x");
+    expect(v.length).toBe(1024);
+  });
+
+  it("rejects unknown model unless dim is provided", () => {
+    expect(() =>
+      createTransformersJSEmbedder({ model: "weird-new-model" }),
+    ).toThrow(/unknown transformers\.js embedding model/i);
+  });
+
+  it("accepts unknown model when dim is provided explicitly", async () => {
+    const e = createTransformersJSEmbedder({
+      model: "weird-new-model",
+      dim: 512,
+      loadModule: makeFakeTransformersModule(512),
+    });
+    expect(e.name).toBe("transformers-js:weird-new-model");
+    expect(e.dim).toBe(512);
+    expect((await e.embed("x")).length).toBe(512);
+  });
+
+  it("rejects empty text", async () => {
+    const e = createTransformersJSEmbedder({
+      loadModule: makeFakeTransformersModule(384),
+    });
+    await expect(e.embed("")).rejects.toThrow(/empty text/i);
+  });
+
+  it("throws RUNTIME error if pipeline returns wrong dim", async () => {
+    // Configure factory to know dim=384 but the fake pipeline returns 512
+    const e = createTransformersJSEmbedder({
+      loadModule: makeFakeTransformersModule(512),
+    });
+    // Override the static dim to mismatch (force a 384 model into the 512 fake)
+    expect(e.dim).toBe(384);
+    await expect(e.embed("hi")).rejects.toThrow(/512-dim vector.*expected 384/);
+  });
+
+  it("only loads the pipeline once for concurrent calls", async () => {
+    let loadCount = 0;
+    const loadModule = async () => ({
+      env: {},
+      pipeline: async () => {
+        loadCount++;
+        return async () => ({ data: new Float32Array(384) });
+      },
+    });
+    const e = createTransformersJSEmbedder({ loadModule });
+    await Promise.all([e.embed("a"), e.embed("b"), e.embed("c"), e.embed("d")]);
+    expect(loadCount).toBe(1);
+  });
+
+  it("surfaces a helpful error when the package is not installed", async () => {
+    const e = createTransformersJSEmbedder({
+      loadModule: async () => {
+        throw new Error("Cannot find module '@huggingface/transformers'");
+      },
+    });
+    await expect(e.embed("hi")).rejects.toThrow(
+      /requires @huggingface\/transformers.*npm install/i,
+    );
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
 // resolveEmbedderFromEnv()
 // ────────────────────────────────────────────────────────────────────
 
@@ -310,5 +408,69 @@ describe("resolveEmbedderFromEnv", () => {
         env: { OPENAI_API_KEY: "sk", OPENAI_DIM: "-5" },
       }),
     ).toThrow(/OPENAI_DIM/);
+  });
+
+  it("explicit provider=transformers-js uses defaults when no env vars set", () => {
+    const e = resolveEmbedderFromEnv({
+      provider: "transformers-js",
+      env: {},
+      loadTransformersModule: makeFakeTransformersModule(384),
+    });
+    expect(e.name).toBe("transformers-js:Xenova/all-MiniLM-L6-v2");
+    expect(e.dim).toBe(384);
+  });
+
+  it("explicit provider=transformers-js respects TRANSFORMERS_MODEL", () => {
+    const e = resolveEmbedderFromEnv({
+      provider: "transformers-js",
+      env: { TRANSFORMERS_MODEL: "Xenova/bge-base-en-v1.5" },
+      loadTransformersModule: makeFakeTransformersModule(768),
+    });
+    expect(e.name).toBe("transformers-js:Xenova/bge-base-en-v1.5");
+    expect(e.dim).toBe(768);
+  });
+
+  it("auto-detects: falls back to transformers-js when TRANSFORMERS_MODEL hint is set", () => {
+    const e = resolveEmbedderFromEnv({
+      env: { TRANSFORMERS_MODEL: "Xenova/all-MiniLM-L6-v2" },
+      loadTransformersModule: makeFakeTransformersModule(384),
+    });
+    expect(e.name).toBe("transformers-js:Xenova/all-MiniLM-L6-v2");
+  });
+
+  it("rejects malformed TRANSFORMERS_DIM", () => {
+    expect(() =>
+      resolveEmbedderFromEnv({
+        provider: "transformers-js",
+        env: { TRANSFORMERS_DIM: "not-a-number" },
+      }),
+    ).toThrow(/TRANSFORMERS_DIM/);
+  });
+
+  it("rejects invalid TRANSFORMERS_DTYPE", () => {
+    expect(() =>
+      resolveEmbedderFromEnv({
+        provider: "transformers-js",
+        env: { TRANSFORMERS_DTYPE: "fp64" },
+      }),
+    ).toThrow(/TRANSFORMERS_DTYPE/);
+  });
+
+  it("rejects invalid TRANSFORMERS_POOLING", () => {
+    expect(() =>
+      resolveEmbedderFromEnv({
+        provider: "transformers-js",
+        env: { TRANSFORMERS_POOLING: "max" },
+      }),
+    ).toThrow(/TRANSFORMERS_POOLING/);
+  });
+
+  it("rejects invalid TRANSFORMERS_NORMALIZE", () => {
+    expect(() =>
+      resolveEmbedderFromEnv({
+        provider: "transformers-js",
+        env: { TRANSFORMERS_NORMALIZE: "yes" },
+      }),
+    ).toThrow(/TRANSFORMERS_NORMALIZE/);
   });
 });
